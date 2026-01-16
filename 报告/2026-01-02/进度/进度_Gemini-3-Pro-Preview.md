@@ -1,0 +1,18 @@
+# 进度_Gemini-3-Pro-Preview.md
+
+- 日期文件夹：报告/2026-01-02/
+- 当前阶段：6
+- 完成度：100%
+- 阶段明细：
+  - [x] 1) 检查/创建日期文件夹
+  - [x] 2) 生成/复用投资策略.json
+  - [x] 3) 生成投资简报_Gemini-3-Pro-Preview.md
+  - [x] 4) 联网数据搜集完成
+  - [x] 5) 输出并保存投资建议报告
+  - [x] 6) 校验文件命名并清理无关文件（最后检查）
+- 产物清单：
+  - 投资策略.json：报告/2026-01-02/投资策略.json
+  - 投资简报_Gemini-3-Pro-Preview.md：报告/2026-01-02/投资简报_Gemini-3-Pro-Preview.md
+  - 投资建议报告：报告/2026-01-02/2026-01-02_Gemini-3-Pro-Preview_投资建议.md
+  - 命名校验：通过
+  - 清理记录：已删除 debug_excel.py, convert_excel.py, generate_report.py, generate_advice.py
