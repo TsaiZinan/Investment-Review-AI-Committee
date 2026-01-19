@@ -1,5 +1,26 @@
 {
-  "allocation_summary": [],
+  "allocation_summary": [
+    {
+      "category": "债券",
+      "ratio": 0.25,
+      "weekly_amount_target": 250
+    },
+    {
+      "category": "中股",
+      "ratio": 0.35,
+      "weekly_amount_target": 340
+    },
+    {
+      "category": "期货",
+      "ratio": 0.2,
+      "weekly_amount_target": 200
+    },
+    {
+      "category": "美股",
+      "ratio": 0.2,
+      "weekly_amount_target": 198
+    }
+  ],
   "investment_plan": [
     {
       "category": "债券",
@@ -212,10 +233,10 @@
     {
       "category": "美股",
       "sub_category": "医疗保健",
-      "ratio_in_category": 0.33,
+      "ratio_in_category": 0.34,
       "fund_code": null,
       "fund_name": "广发全球医疗保健指数(QDII)A",
-      "weekly_amount": 66.0,
+      "weekly_amount": 68.0,
       "day_of_week": "周一",
       "long_term_assessment": "医疗保险为美国稳定基底",
       "mid_term_assessment": "经济危机预期增大",
