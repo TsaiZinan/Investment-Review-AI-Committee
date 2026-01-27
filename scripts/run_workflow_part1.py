@@ -1,63 +1,27 @@
-import argparse
-import csv
+import pandas as pd
 import json
+import os
 import sys
-import urllib.request
 from datetime import date
 from pathlib import Path
+import re
 
-import pandas as pd
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_FILE = PROJECT_ROOT / "Data/投资策略.xlsx"
-
-FRED_SERIES = [
-    "DGS10",
-    "DGS2",
-    "DFII10",
-    "T10Y2Y",
-    "DTWEXBGS",
-    "T10YIE",
-    "GVZCLS",
-]
-
-
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--model", default="GPT-5.2")
-    p.add_argument("--date", dest="report_date", default=date.today().isoformat())
-    p.add_argument("--fetch", action="store_true")
-    p.add_argument("--template-report", action="store_true")
-    p.add_argument("--validate", action="store_true")
-    return p.parse_args()
-
-
-def paths_for(report_date: str, model_name: str):
-    report_dir = PROJECT_ROOT / "报告" / report_date
-    progress_dir = report_dir / "进度"
-    brief_dir = report_dir / "简报"
-    json_file = report_dir / "投资策略.json"
-    brief_file = brief_dir / f"投资简报_{model_name}.md"
-    progress_file = progress_dir / f"进度_{model_name}.md"
-    report_file = report_dir / f"{report_date}_{model_name}_投资建议.md"
-    market_data_file = report_dir / "market_data.json"
-    validation_report_file = report_dir / f"标的一致性校验报告_{model_name}.md"
-    return {
-        "report_dir": report_dir,
-        "progress_dir": progress_dir,
-        "brief_dir": brief_dir,
-        "json_file": json_file,
-        "brief_file": brief_file,
-        "progress_file": progress_file,
-        "report_file": report_file,
-        "market_data_file": market_data_file,
-        "validation_report_file": validation_report_file,
-    }
+# --- Configuration ---
+MODEL_NAME = "Gemini-3-Pro-Preview"
+TODAY = date.today().isoformat()
+ROOT_DIR = Path("/Users/cai/Desktop/SynologyDrive/Project/#ProjectLife-000000-理财")
+REPORT_DIR = ROOT_DIR / f"报告/{TODAY}"
+PROGRESS_DIR = REPORT_DIR / "进度"
+BRIEF_DIR = REPORT_DIR / "简报"
+DATA_FILE = ROOT_DIR / "Data/投资策略.xlsx"
+JSON_FILE = REPORT_DIR / "投资策略.json"
+BRIEF_FILE = BRIEF_DIR / f"投资简报_{MODEL_NAME}.md"
+PROGRESS_FILE = PROGRESS_DIR / f"进度_{MODEL_NAME}.md"
 
 # --- 1. Folders ---
-def setup_folders(report_date: str, report_dir: Path, progress_dir: Path, brief_dir: Path):
-    print(f"Checking folders for {report_date}...")
-    for p in [report_dir, progress_dir, brief_dir]:
+def setup_folders():
+    print(f"Checking folders for {TODAY}...")
+    for p in [REPORT_DIR, PROGRESS_DIR, BRIEF_DIR]:
         if not p.exists():
             p.mkdir(parents=True, exist_ok=True)
             print(f"Created: {p}")
@@ -65,47 +29,44 @@ def setup_folders(report_date: str, report_dir: Path, progress_dir: Path, brief_
             print(f"Exists: {p}")
 
 # --- 2. Progress File ---
-def update_progress(progress_file: Path, report_date: str, model_name: str, stage, completion, details_checked=None, product_status=None):
+def update_progress(stage, completion, details_checked=None, product_status=None):
     print(f"Updating progress: Stage {stage}, {completion}%")
     
     # Template structure
     content = f"""# 进度记录
 
-- 日期文件夹：报告/{report_date}/
+- 日期文件夹：报告/{TODAY}/
 - 当前阶段：{stage}
 - 完成度：{completion}%
 - 阶段明细：
   - [{'x' if details_checked and 1 in details_checked else ' '}] 1) 检查/创建日期文件夹
   - [{'x' if details_checked and 2 in details_checked else ' '}] 2) 生成/复用投资策略.json
-  - [{'x' if details_checked and 3 in details_checked else ' '}] 3) 生成投资简报_{model_name}.md
+  - [{'x' if details_checked and 3 in details_checked else ' '}] 3) 生成投资简报_{MODEL_NAME}.md
   - [{'x' if details_checked and 4 in details_checked else ' '}] 4) 联网数据搜集完成
   - [{'x' if details_checked and 5 in details_checked else ' '}] 5) 输出并保存投资建议报告
   - [{'x' if details_checked and 6 in details_checked else ' '}] 6) 校验文件命名、标的命名并清理无关文件（最后检查）
 
 - 产物清单：
   - 投资策略.json：{product_status.get('json', '未生成') if product_status else '未生成'}
-  - 投资简报_{model_name}.md：{product_status.get('brief', '未生成') if product_status else '未生成'}
+  - 投资简报_{MODEL_NAME}.md：{product_status.get('brief', '未生成') if product_status else '未生成'}
   - 投资建议报告：{product_status.get('report', '未生成') if product_status else '未生成'}
   - 命名校验：{product_status.get('name_check', '待校验') if product_status else '待校验'}
   - 基金标的覆盖校验：{product_status.get('fund_check', '待校验') if product_status else '待校验'}
   - 标的名称一致性校验：{product_status.get('consistency_check', '待校验') if product_status else '待校验'}
   - 清理记录：{product_status.get('cleanup', '无') if product_status else '无'}
 """
-    with open(progress_file, 'w', encoding='utf-8') as f:
+    with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
         f.write(content)
 
 # --- 3. Excel to JSON ---
-def excel_to_json(data_file: Path, json_file: Path):
-    if json_file.exists():
-        print(f"JSON exists: {json_file}, skipping generation.")
+def excel_to_json():
+    if JSON_FILE.exists():
+        print(f"JSON exists: {JSON_FILE}, skipping generation.")
         return True
 
     print("Generating 投资策略.json from Excel...")
     try:
-        try:
-            df = pd.read_excel(data_file, sheet_name=0, header=None, engine="calamine")
-        except Exception:
-            df = pd.read_excel(data_file, sheet_name=0, header=None)
+        df = pd.read_excel(DATA_FILE, sheet_name=0, header=None)
     except Exception as e:
         print(f"Error reading Excel: {e}")
         return False
@@ -118,15 +79,6 @@ def excel_to_json(data_file: Path, json_file: Path):
                 if isinstance(val, str) and s in val:
                     return idx
         return None
-
-    def row_has_any(row, needles):
-        for val in row[:5]:
-            if not isinstance(val, str):
-                continue
-            for n in needles:
-                if n in val:
-                    return True
-        return False
 
     # Parse allocation_summary
     start_alloc = find_row("定投大板块比例")
@@ -152,7 +104,8 @@ def excel_to_json(data_file: Path, json_file: Path):
     current_row = header_row_idx + 1
     while current_row < len(df):
         row = df.iloc[current_row]
-        if row_has_any(row, ["定投计划", "非定投"]):
+        first_cell = str(row[0]) if pd.notna(row[0]) else ""
+        if "定投计划" in first_cell or "非定投" in first_cell:
             break
         
         cat = row[col_cat]
@@ -203,7 +156,8 @@ def excel_to_json(data_file: Path, json_file: Path):
     current_row = header_row_idx + 1
     while current_row < len(df):
         row = df.iloc[current_row]
-        if row_has_any(row, ["非定投"]):
+        first_cell = str(row[0]) if pd.notna(row[0]) else ""
+        if "非定投" in first_cell:
             break
             
         # Skip if name is empty
@@ -280,20 +234,20 @@ def excel_to_json(data_file: Path, json_file: Path):
         "non_investment_holdings": non_investment_holdings
     }
     
-    with open(json_file, 'w', encoding='utf-8') as f:
+    with open(JSON_FILE, 'w', encoding='utf-8') as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
-    print(f"Generated: {json_file}")
+    print(f"Generated: {JSON_FILE}")
     return True
 
 # --- 4. JSON to Brief Markdown ---
-def json_to_brief(json_file: Path, brief_file: Path):
-    if brief_file.exists():
-        print(f"Brief exists: {brief_file}, skipping generation.")
+def json_to_brief():
+    if BRIEF_FILE.exists():
+        print(f"Brief exists: {BRIEF_FILE}, skipping generation.")
         return True
 
-    print(f"Generating {brief_file}...")
+    print(f"Generating {BRIEF_FILE}...")
     try:
-        with open(json_file, 'r', encoding='utf-8') as f:
+        with open(JSON_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
     except Exception as e:
         print(f"Error reading JSON: {e}")
@@ -305,7 +259,7 @@ def json_to_brief(json_file: Path, brief_file: Path):
 
     lines = []
     lines.append("# 投资策略（由 JSON 转换）")
-    lines.append(f"来源：[投资策略.json](file://{json_file})")
+    lines.append(f"来源：[投资策略.json](file://{JSON_FILE})")
     lines.append("")
 
     # 1. 配置概览
@@ -508,311 +462,27 @@ def json_to_brief(json_file: Path, brief_file: Path):
                 
                 lines.append(f"  - {name}：{amt:.2f}/周（{day}）{suffix}")
     
-    with open(brief_file, 'w', encoding='utf-8') as f:
+    with open(BRIEF_FILE, 'w', encoding='utf-8') as f:
         f.write('\n'.join(lines))
-    print(f"Generated: {brief_file}")
+    print(f"Generated: {BRIEF_FILE}")
     return True
-
-
-def fetch_fred_series(series_id: str):
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    with urllib.request.urlopen(url, timeout=20) as resp:
-        raw = resp.read().decode("utf-8", errors="replace")
-
-    rows = list(csv.reader(raw.splitlines()))
-    if len(rows) < 2:
-        return {"id": series_id, "url": url, "date": None, "value": None}
-
-    date_idx = None
-    value_idx = None
-    header = rows[0]
-    for i, h in enumerate(header):
-        hl = h.strip().lower()
-        if hl in {"date", "observation_date"}:
-            date_idx = i
-        if h.strip() == series_id:
-            value_idx = i
-
-    if date_idx is None or value_idx is None:
-        return {"id": series_id, "url": url, "date": None, "value": None}
-
-    last_date = None
-    last_value = None
-    for r in rows[1:]:
-        if len(r) <= max(date_idx, value_idx):
-            continue
-        d = r[date_idx].strip()
-        v = r[value_idx].strip()
-        if not d or not v or v == ".":
-            continue
-        try:
-            last_date = d
-            last_value = float(v)
-        except ValueError:
-            continue
-
-    return {"id": series_id, "url": url, "date": last_date, "value": last_value}
-
-
-def fetch_fund_estimate(fund_code: str):
-    url = f"https://fundgz.1234567.com.cn/js/{fund_code}.js"
-    with urllib.request.urlopen(url, timeout=20) as resp:
-        raw = resp.read().decode("utf-8", errors="replace").strip()
-
-    left = raw.find("(")
-    right = raw.rfind(")")
-    if left == -1 or right == -1 or right <= left:
-        return {"fund_code": fund_code, "url": url, "data": None}
-
-    payload = raw[left + 1 : right]
-    try:
-        data = json.loads(payload)
-    except Exception:
-        data = None
-    return {"fund_code": fund_code, "url": url, "data": data}
-
-
-def fetch_market_data(out_path: Path, strategy_json=None):
-    out = {"fetched_at": date.today().isoformat(), "fred": {}, "funds": {}}
-    for s in FRED_SERIES:
-        try:
-            out["fred"][s] = fetch_fred_series(s)
-        except Exception as e:
-            out["fred"][s] = {"id": s, "url": f"https://fred.stlouisfed.org/series/{s}", "date": None, "value": None, "error": str(e)}
-
-    fund_codes = []
-    if strategy_json and strategy_json.exists():
-        try:
-            data = json.loads(strategy_json.read_text(encoding="utf-8"))
-            plan = data.get("investment_plan", [])
-            fund_codes = [x.get("fund_code") for x in plan if x.get("fund_code")]
-            fund_codes = list(dict.fromkeys(fund_codes))
-        except Exception:
-            fund_codes = []
-
-    for code in fund_codes:
-        try:
-            out["funds"][code] = fetch_fund_estimate(code)
-        except Exception as e:
-            out["funds"][code] = {"fund_code": code, "url": f"https://fundgz.1234567.com.cn/js/{code}.js", "data": None, "error": str(e)}
-
-    out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
-    return True
-
-
-def pct(x):
-    return f"{x:.2f}%"
-
-
-def build_template_report(report_date: str, model_name: str, json_file: Path, brief_file: Path, report_file: Path, market_data_file: Path):
-    data = json.loads(json_file.read_text(encoding="utf-8"))
-    alloc = data.get("allocation_summary", [])
-    plan = data.get("investment_plan", [])
-    non_inv = data.get("non_investment_holdings", [])
-
-    cat_ratio = {x.get("category"): float(x.get("ratio") or 0) for x in alloc}
-
-    market = None
-    if market_data_file.exists():
-        try:
-            market = json.loads(market_data_file.read_text(encoding="utf-8"))
-        except Exception:
-            market = None
-
-    lines = []
-    lines.append("### 0. 输入回显 (Input Echo)")
-    lines.append(f"* 日期：{report_date}")
-    lines.append(f"* 模型名：{{模型名}} = {model_name}")
-    lines.append("* 定投检视周期：每月（默认）")
-    lines.append("* 风险偏好：稳健（默认）")
-    if alloc:
-        parts = [f"{x.get('category')} {pct((x.get('ratio') or 0) * 100)}" for x in alloc]
-        lines.append(f"* 定投大类目标（当前）：{' / '.join(parts)}（合计 {pct(sum((x.get('ratio') or 0) for x in alloc) * 100)}）")
-    else:
-        lines.append("* 定投大类目标（当前）：未知")
-    lines.append("* 关键假设：本文件为模板；建议%与当前%相同；后续可覆盖填写")
-    lines.append("* 产物路径：")
-    lines.append(f"  - 投资策略.json：`报告/{report_date}/投资策略.json`")
-    lines.append(f"  - 投资简报_{model_name}.md：`报告/{report_date}/简报/投资简报_{model_name}.md`")
-    if market_data_file.exists():
-        lines.append(f"  - market_data.json：`报告/{report_date}/market_data.json`")
-    lines.append("")
-
-    if market and market.get("fred"):
-        lines.append("### 0.1 宏观快照（可选）")
-        for sid, rec in market["fred"].items():
-            v = rec.get("value")
-            d = rec.get("date")
-            if v is None or d is None:
-                continue
-            lines.append(f"* {sid}：{v}（{d}）")
-        lines.append("")
-
-    lines.append("### 1. 定投增减要点（最多 5 条）(Top SIP Changes)")
-    lines.append("* （待填写）")
-    lines.append("")
-
-    lines.append("### 2. 大板块比例调整建议（必须）(Category Allocation Changes)")
-    lines.append("| 大板块 | 当前% | 建议% | 变动 | 建议（增配/减配/不变） | 简短理由 |")
-    lines.append("|---|---:|---:|---:|---|---|")
-    for a in alloc:
-        c = a.get("category")
-        curr = (a.get("ratio") or 0) * 100
-        lines.append(f"| {c} | {pct(curr)} | {pct(curr)} | +0.00% | 不变 |  |")
-    lines.append("")
-
-    lines.append("### 3. 定投计划逐项建议（全量，逐项表格）(Per-Item Actions)")
-    lines.append("| 大板块 | 小板块 | 标的 | 定投日 | 当前% | 建议% | 变动 | 建议（增持/减持/不变） | 简短理由 |")
-    lines.append("|---|---|---|---|---:|---:|---:|---|---|")
-    for it in plan:
-        cat = it.get("category") or ""
-        sub = it.get("sub_category") or ""
-        name = it.get("fund_name") or ""
-        day = it.get("day_of_week") or ""
-        curr = (cat_ratio.get(cat, 0) * float(it.get("ratio_in_category") or 0)) * 100
-        lines.append(f"| {cat} | {sub} | {name} | {day} | {pct(curr)} | {pct(curr)} | +0.00% | 不变 |  |")
-    lines.append("")
-
-    lines.append("### 4. 新的定投方向建议（如有）(New SIP Directions)")
-    lines.append("| 行业/主题 | 建议定投比例 | 口径 | 简短理由 |")
-    lines.append("|---|---:|---|---|")
-    lines.append("| 无 | 0% | 全组合 | 本周期不新增 |")
-    lines.append("")
-
-    lines.append("### 5. 执行指令（下一周期）(Next Actions)")
-    lines.append("* 定投：（待填写）")
-    lines.append("* 资金池：（待填写）")
-    lines.append("* 风险控制：（待填写）")
-    lines.append("")
-
-    lines.append("### 6. 现有持仓建议（最多 5 点）(Holdings Notes)")
-    if non_inv:
-        names = [x.get("fund_name") for x in non_inv if x.get("fund_name")]
-        if len(names) <= 5:
-            for nm in names:
-                lines.append(f"* {nm}：（待填写） — （待填写）")
-        else:
-            n_groups = 5
-            per = (len(names) + n_groups - 1) // n_groups
-            groups = [names[i : i + per] for i in range(0, len(names), per)]
-            groups = groups[:5]
-            for g in groups:
-                lines.append(f"* {'、'.join(g)}：（待填写） — （待填写）")
-    else:
-        lines.append("* 无")
-    lines.append("")
-
-    lines.append("### 7. 数据来源 (Sources)")
-    if market and market.get("fred"):
-        for sid, rec in market["fred"].items():
-            url = rec.get("url")
-            d = rec.get("date")
-            if url and d:
-                lines.append(f"* {sid}（{d}）：{url}")
-    lines.append("* （待补充：宏观/标的级信息点）")
-    lines.append("")
-
-    report_file.write_text("\n".join(lines), encoding="utf-8")
-    return True
-
-
-def validate_report(report_date: str, model_name: str, json_file: Path, report_file: Path, out_md: Path):
-    if not report_file.exists():
-        out_md.write_text("# 标的名称一致性校验报告\n\n未找到投资建议报告文件。\n", encoding="utf-8")
-        return False
-
-    data = json.loads(json_file.read_text(encoding="utf-8"))
-    plan = data.get("investment_plan", [])
-    non_inv = data.get("non_investment_holdings", [])
-    names = [x.get("fund_name") for x in plan if x.get("fund_name")] + [x.get("fund_name") for x in non_inv if x.get("fund_name")]
-    names = list(dict.fromkeys(names))
-
-    text = report_file.read_text(encoding="utf-8", errors="replace")
-    missing = [n for n in names if n not in text]
-
-    ok_name = report_file.name == f"{report_date}_{model_name}_投资建议.md"
-    ok_cover = len(missing) == 0
-
-    lines = []
-    lines.append("# 标的名称一致性校验报告")
-    lines.append("")
-    lines.append(f"- 日期：{report_date}")
-    lines.append(f"- 模型名：{model_name}")
-    lines.append(f"- 报告文件：`报告/{report_date}/{report_file.name}`")
-    lines.append("")
-    lines.append("## 校验结果")
-    lines.append(f"- 文件命名：{'通过' if ok_name else '不通过'}")
-    lines.append(f"- 标的覆盖：{'通过' if ok_cover else '不通过'}")
-    lines.append("")
-    if missing:
-        lines.append("## 缺失标的（未在报告正文中找到逐字匹配）")
-        for n in missing:
-            lines.append(f"- {n}")
-        lines.append("")
-    else:
-        lines.append("## 覆盖明细")
-        lines.append(f"- 共 {len(names)} 个标的均可在报告正文中逐字匹配到")
-        lines.append("")
-
-    out_md.write_text("\n".join(lines), encoding="utf-8")
-    return ok_name and ok_cover
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    args = parse_args()
-    model_name = args.model
-    report_date = args.report_date
-    paths = paths_for(report_date, model_name)
-    setup_folders(report_date, paths["report_dir"], paths["progress_dir"], paths["brief_dir"])
-    update_progress(paths["progress_file"], report_date, model_name, 1, 10, details_checked=[1], product_status={})
+    setup_folders()
+    update_progress(1, 10, details_checked=[1], product_status={})
     
-    if excel_to_json(DATA_FILE, paths["json_file"]):
-        update_progress(paths["progress_file"], report_date, model_name, 2, 30, details_checked=[1, 2], product_status={'json': str(paths["json_file"].relative_to(PROJECT_ROOT))})
+    if excel_to_json():
+        update_progress(2, 30, details_checked=[1, 2], product_status={'json': str(JSON_FILE.relative_to(ROOT_DIR))})
     else:
         print("Failed to generate JSON.")
         sys.exit(1)
         
-    if json_to_brief(paths["json_file"], paths["brief_file"]):
-        update_progress(paths["progress_file"], report_date, model_name, 3, 50, details_checked=[1, 2, 3], product_status={
-            "json": str(paths["json_file"].relative_to(PROJECT_ROOT)),
-            "brief": str(paths["brief_file"].relative_to(PROJECT_ROOT)),
+    if json_to_brief():
+        update_progress(3, 50, details_checked=[1, 2, 3], product_status={
+            'json': str(JSON_FILE.relative_to(ROOT_DIR)),
+            'brief': str(BRIEF_FILE.relative_to(ROOT_DIR))
         })
     else:
         print("Failed to generate Brief.")
         sys.exit(1)
-
-    if args.fetch:
-        ok = fetch_market_data(paths["market_data_file"], paths["json_file"])
-        if ok:
-            update_progress(paths["progress_file"], report_date, model_name, 4, 70, details_checked=[1, 2, 3, 4], product_status={
-                "json": str(paths["json_file"].relative_to(PROJECT_ROOT)),
-                "brief": str(paths["brief_file"].relative_to(PROJECT_ROOT)),
-            })
-
-    if args.template_report:
-        ok = build_template_report(
-            report_date,
-            model_name,
-            paths["json_file"],
-            paths["brief_file"],
-            paths["report_file"],
-            paths["market_data_file"],
-        )
-        if ok:
-            update_progress(paths["progress_file"], report_date, model_name, 5, 85, details_checked=[1, 2, 3, 4, 5], product_status={
-                "json": str(paths["json_file"].relative_to(PROJECT_ROOT)),
-                "brief": str(paths["brief_file"].relative_to(PROJECT_ROOT)),
-                "report": str(paths["report_file"].relative_to(PROJECT_ROOT)),
-            })
-
-    if args.validate:
-        ok = validate_report(report_date, model_name, paths["json_file"], paths["report_file"], paths["validation_report_file"])
-        status = "通过" if ok else "不通过"
-        update_progress(paths["progress_file"], report_date, model_name, 6, 100 if ok else 95, details_checked=[1, 2, 3, 4, 5, 6], product_status={
-            "json": str(paths["json_file"].relative_to(PROJECT_ROOT)),
-            "brief": str(paths["brief_file"].relative_to(PROJECT_ROOT)),
-            "report": str(paths["report_file"].relative_to(PROJECT_ROOT)) if paths["report_file"].exists() else "未生成",
-            "name_check": status,
-            "fund_check": status,
-            "consistency_check": status,
-        })

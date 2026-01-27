@@ -1,4 +1,3 @@
-import argparse
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -8,19 +7,12 @@ from typing import Dict, List, Optional, Tuple
 
 
 ROOT = Path(__file__).resolve().parent
+DATE = date.today().isoformat()
+INPUT_DIR = ROOT / "报告" / DATE
+OUTPUT_PATH = ROOT / "每日最终报告" / f"{DATE}_最终投资总结.md"
 
 
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--date", dest="report_date", default="auto")
-    return p.parse_args()
-
-
-def paths_for(report_date: str):
-    input_dir = ROOT / "报告" / report_date
-    output_path = ROOT / "每日最终报告" / f"{report_date}_最终投资总结.md"
-    file_re = re.compile(rf"^{re.escape(report_date)}_(.+)_投资建议\.md$")
-    return input_dir, output_path, file_re
+FILE_RE = re.compile(rf"^{re.escape(DATE)}_(.+)_投资建议\.md$")
 
 MODEL_ORDER_FIXED = [
     "DeepSeek",
@@ -76,25 +68,6 @@ def parse_float_from_text(s: str) -> Optional[float]:
 
 def format_pct(x: float) -> str:
     return f"{x:.2f}%"
-
-
-def strip_md_markup(s: str) -> str:
-    if not s:
-        return ""
-    t = s.strip()
-    t = re.sub(r"[*_`]", "", t)
-    return t.strip()
-
-
-def normalize_optional_text(s: Optional[str]) -> Optional[str]:
-    if s is None:
-        return None
-    t = strip_md_markup(s)
-    if not t:
-        return None
-    if t in {"—", "-", "–", "— —"}:
-        return None
-    return t
 
 
 def parse_markdown_table(lines: List[str]) -> List[List[str]]:
@@ -239,13 +212,11 @@ def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, Ce
     for row in body:
         if len(row) <= max(key_col, pct_col, dir_col):
             continue
-        key = strip_md_markup(row[key_col])
+        key = row[key_col].strip()
         if not key:
             continue
-        if key in {"合计", "总计"}:
-            continue
         pct = parse_float_from_text(row[pct_col])
-        direction = normalize_optional_text(row[dir_col])
+        direction = row[dir_col].strip() or None
         out[key] = CellCandidate(
             display=cell_display(pct, direction),
             pct=pct,
@@ -277,13 +248,11 @@ def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCan
     for row in body:
         if len(row) <= max(key_col, pct_col, dir_col):
             continue
-        key = strip_md_markup(row[key_col])
+        key = row[key_col].strip()
         if not key:
             continue
-        if key in {"合计", "总计"}:
-            continue
         pct = parse_float_from_text(row[pct_col])
-        direction = normalize_optional_text(row[dir_col])
+        direction = row[dir_col].strip() or None
         out[key] = CellCandidate(
             display=cell_display(pct, direction),
             pct=pct,
@@ -356,23 +325,11 @@ def parse_themes(text: str, raw_model: str) -> Tuple[List[ThemeEntry], bool]:
         return [], explicitly_no_new
 
     entries: List[ThemeEntry] = []
-
-    def is_empty_topic(topic: str) -> bool:
-        t = unicodedata.normalize("NFKC", topic or "").strip()
-        t = t.replace("（", "(").replace("）", ")")
-        t = re.sub(r"\s+", "", t)
-        core = t.strip("()").strip()
-        return core in {"无", "暂无", "—", "-", "（无）", "(无)", "（暂无）", "(暂无)"}
-
     for row in body:
         if len(row) <= max(topic_col, pct_col, caliber_col):
             continue
         topic = row[topic_col].strip()
-        if not topic or is_empty_topic(topic):
-            explicitly_no_new = explicitly_no_new or bool(topic)
-            continue
-        if re.search(r"本周期不新增|不新增|无新增|无需新增", topic):
-            explicitly_no_new = True
+        if not topic or topic in ["无", "—", "-"]:
             continue
         pct = parse_float_from_text(row[pct_col])
         caliber = row[caliber_col].strip() or "—"
@@ -503,14 +460,14 @@ def closeness(entry: ThemeEntry, main_norm: str) -> Tuple[int, int, str]:
     return (2, -common, entry.topic)
 
 
-def collect_files(input_dir: Path, file_re: re.Pattern) -> List[Tuple[Path, str]]:
-    if not input_dir.exists():
-        return []
+def collect_files() -> List[Tuple[Path, str]]:
+    if not INPUT_DIR.exists():
+        raise SystemExit(f"Input dir not found: {INPUT_DIR}")
     found: List[Tuple[Path, str]] = []
-    for p in input_dir.iterdir():
+    for p in INPUT_DIR.iterdir():
         if not p.is_file():
             continue
-        m = file_re.match(p.name)
+        m = FILE_RE.match(p.name)
         if not m:
             continue
         found.append((p, m.group(1)))
@@ -518,54 +475,10 @@ def collect_files(input_dir: Path, file_re: re.Pattern) -> List[Tuple[Path, str]
     return found
 
 
-def find_latest_report_date() -> Optional[str]:
-    report_root = ROOT / "报告"
-    if not report_root.exists():
-        return None
-    date_dirs: List[str] = []
-    for p in report_root.iterdir():
-        if not p.is_dir():
-            continue
-        name = p.name.strip()
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", name):
-            date_dirs.append(name)
-    date_dirs.sort()
-    for d in reversed(date_dirs):
-        input_dir, _, file_re = paths_for(d)
-        if collect_files(input_dir, file_re):
-            return d
-    return None
-
-
 def main() -> None:
-    args = parse_args()
-    report_date = args.report_date
-    candidate_dates: List[str] = []
-    if report_date == "auto":
-        candidate_dates.append(date.today().isoformat())
-        latest = find_latest_report_date()
-        if latest and latest not in candidate_dates:
-            candidate_dates.append(latest)
-    else:
-        candidate_dates.append(report_date)
-
-    selected_date: Optional[str] = None
-    files: List[Tuple[Path, str]] = []
-    output_path: Optional[Path] = None
-    for d in candidate_dates:
-        input_dir, out_path, file_re = paths_for(d)
-        collected = collect_files(input_dir, file_re)
-        if collected:
-            selected_date = d
-            files = collected
-            output_path = out_path
-            break
-
-    if not selected_date or not output_path or not files:
-        tried = ", ".join(candidate_dates) if candidate_dates else report_date
-        raise SystemExit(f"No input files matched for date(s): {tried}")
-
-    report_date = selected_date
+    files = collect_files()
+    if not files:
+        raise SystemExit(f"No input files matched in {INPUT_DIR}")
 
     models_present: List[str] = []
     parsed: List[Tuple[str, str, str]] = []
@@ -708,7 +621,7 @@ def main() -> None:
         theme_rows.append(row)
 
     md_parts: List[str] = []
-    md_parts.append(f"# 投资总结（{report_date}）")
+    md_parts.append(f"# 投资总结（{DATE}）")
     md_parts.append("")
     md_parts.append("## 1. 大板块比例调整建议（按大类横向对比）")
     md_parts.append(render_table(cat_headers, cat_rows))
@@ -726,9 +639,10 @@ def main() -> None:
     md_parts.append(render_table(theme_headers, theme_rows))
     md_parts.append("")
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(md_parts), encoding="utf-8")
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT_PATH.write_text("\n".join(md_parts), encoding="utf-8")
 
 
 if __name__ == "__main__":
     main()
+

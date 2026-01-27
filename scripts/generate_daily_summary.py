@@ -1,4 +1,3 @@
-import argparse
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -6,29 +5,17 @@ from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 
+# Configuration
 ROOT = Path.cwd()
+DATE = date.today().isoformat()
+# Ensure we are using the correct date if system time differs, but here we trust env.
+# If user wanted a specific date, we might need an argument, but prompt says "当天日期".
 
-_MD_MARK_RE = re.compile(r'(\*\*|__|\*|_|`)+')
+INPUT_DIR = ROOT / '报告' / DATE
+OUTPUT_DIR = ROOT / '每日最终报告'
+OUTPUT_PATH = OUTPUT_DIR / f'{DATE}_最终投资总结.md'
 
-
-def strip_markdown_marks(s: str) -> str:
-    if not s:
-        return ''
-    return _MD_MARK_RE.sub('', s).strip()
-
-
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--date", dest="report_date", default=date.today().isoformat())
-    return p.parse_args()
-
-
-def paths_for(report_date: str):
-    input_dir = ROOT / "报告" / report_date
-    output_dir = ROOT / "每日最终报告"
-    output_path = output_dir / f"{report_date}_最终投资总结.md"
-    file_re = re.compile(rf"^{re.escape(report_date)}_(.+)_投资建议\.md$")
-    return input_dir, output_dir, output_path, file_re
+FILE_RE = re.compile(rf'^{re.escape(DATE)}_(.+)_投资建议\.md$')
 
 # Model Order
 MODEL_ORDER_FIXED = [
@@ -79,39 +66,6 @@ def parse_markdown_table(table_lines: List[str]) -> List[List[str]]:
         rows.append(parts)
     return rows
 
-def extract_section_lines(text: str, heading_substring: str) -> List[str]:
-    lines = text.splitlines()
-    start_idx = None
-    for i, ln in enumerate(lines):
-        if heading_substring in ln:
-            start_idx = i
-            break
-    if start_idx is None:
-        return []
-
-    out = []
-    for ln in lines[start_idx + 1:]:
-        if ln.startswith('## '):
-            break
-        out.append(ln)
-    return out
-
-def parse_tables_from_lines(lines: List[str]) -> List[List[List[str]]]:
-    tables = []
-    i = 0
-    while i < len(lines):
-        if lines[i].strip().startswith('|'):
-            block = []
-            while i < len(lines) and lines[i].strip().startswith('|'):
-                block.append(lines[i])
-                i += 1
-            parsed = parse_markdown_table(block)
-            if parsed:
-                tables.append(parsed)
-            continue
-        i += 1
-    return tables
-
 def find_table_after_heading(text: str, heading_substring: str) -> Tuple[Optional[List[List[str]]], str]:
     lines = text.splitlines()
     start_idx = None
@@ -153,7 +107,7 @@ def is_separator_row(row: List[str]) -> bool:
 
 def find_col(header: List[str], includes: List[str], excludes: List[str] = []) -> Optional[int]:
     for i, h in enumerate(header):
-        hh = strip_markdown_marks(h).strip()
+        hh = h.strip()
         if any(ex in hh for ex in excludes): continue
         if all(inc in hh for inc in includes): return i
     return None
@@ -194,8 +148,6 @@ def direction_to_stat(direction: Optional[str], *, is_category: bool) -> Optiona
     if not direction: return None
     d = direction.strip()
     if any(x in d for x in ['维持', '不变', '保持']): return '不变'
-    if any(x in d for x in ['暂停', '停止', '减半', '减仓', '减配', '降低', '下调']): return '减'
-    if any(x in d for x in ['加仓', '加码', '提升', '上调', '增配']): return '增'
     
     if is_category:
         if '小幅增配' in d: return '增'
@@ -212,58 +164,27 @@ def direction_to_stat(direction: Optional[str], *, is_category: bool) -> Optiona
 
 def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCandidate]]:
     table, _ = find_table_after_heading(text, '大板块比例调整建议')
-    if not table or len(table) < 2:
-        table, _ = find_table_after_heading(text, '大板块比例调整建议')
-    if not table or len(table) < 2:
-        return [], {}
+    if not table or len(table) < 2: return [], {}
 
     header = table[0]
     body = table[1:]
     if body and is_separator_row(body[0]): body = body[1:]
 
     key_col = find_col(header, ['大板块'])
-    if key_col is None:
-        key_col = find_col(header, ['大类'])
-
     pct_col = find_col(header, ['建议%'])
-    if pct_col is None:
-        pct_col = find_col(header, ['目标比例'])
-    if pct_col is None:
-        pct_col = find_col(header, ['目标%'])
-
     dir_col = find_col(header, ['建议'], excludes=['建议%'])
-    if dir_col is None:
-        dir_col = find_col(header, ['调整建议'])
 
-    if key_col is None or pct_col is None: return [], {}
+    if key_col is None or pct_col is None or dir_col is None: return [], {}
 
     order = []
     out = {}
     for row in body:
-        needed = [key_col, pct_col]
-        if dir_col is not None:
-            needed.append(dir_col)
-        if len(row) <= max(needed): continue
-        key = strip_markdown_marks(row[key_col]).strip()
+        if len(row) <= max(key_col, pct_col, dir_col): continue
+        key = row[key_col].strip()
         if not key: continue
         
-        pct = parse_float_from_text(strip_markdown_marks(row[pct_col]).strip())
-        direction = None
-        if dir_col is not None:
-            dir_cell = strip_markdown_marks(row[dir_col]).strip()
-            if dir_cell:
-                direction = dir_cell
-
-        if direction:
-            if re.fullmatch(r'[+-]?\d+(?:\.\d+)?%?', direction):
-                v = parse_float_from_text(direction)
-                if v is not None:
-                    if v > 0:
-                        direction = '增配'
-                    elif v < 0:
-                        direction = '减配'
-                    else:
-                        direction = '不变'
+        pct = parse_float_from_text(row[pct_col])
+        direction = row[dir_col].strip() or None
         
         pct_disp = format_pct(pct) if pct is not None else '—'
         dir_disp = direction if direction else '—'
@@ -286,78 +207,47 @@ def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, Ce
     return order, out
 
 def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCandidate]]:
+    table, _ = find_table_after_heading(text, '定投计划逐项建议')
+    if not table or len(table) < 2: return [], {}
+
+    header = table[0]
+    body = table[1:]
+    if body and is_separator_row(body[0]): body = body[1:]
+
+    key_col = find_col(header, ['标的'])
+    pct_col = find_col(header, ['建议%'])
+    dir_col = find_col(header, ['建议'], excludes=['建议%'])
+
+    if key_col is None or pct_col is None or dir_col is None: return [], {}
+
     order = []
     out = {}
-    section_lines = extract_section_lines(text, '定投计划逐项建议')
-    if not section_lines:
-        return [], {}
+    for row in body:
+        if len(row) <= max(key_col, pct_col, dir_col): continue
+        key = row[key_col].strip()
+        if not key: continue
+        
+        pct = parse_float_from_text(row[pct_col])
+        direction = row[dir_col].strip() or None
+        
+        pct_disp = format_pct(pct) if pct is not None else '—'
+        dir_disp = direction if direction else '—'
+        
+        if pct is None and not direction:
+            display = '—'
+        elif pct is not None:
+            display = f'{pct_disp}（{dir_disp}）'
+        else:
+            display = f'—（{dir_disp}）'
 
-    tables = parse_tables_from_lines(section_lines)
-    if not tables:
-        return [], {}
-
-    for table in tables:
-        if len(table) < 2:
-            continue
-
-        header = table[0]
-        body = table[1:]
-        if body and is_separator_row(body[0]): body = body[1:]
-
-        key_col = find_col(header, ['标的'])
-        if key_col is None:
-            continue
-
-        pct_col = find_col(header, ['建议%'])
-        if pct_col is None:
-            pct_col = find_col(header, ['建议比例'])
-
-        dir_col = find_col(header, ['建议'], excludes=['建议%'])
-        if dir_col is None:
-            dir_col = find_col(header, ['建议操作'])
-        if dir_col is None:
-            dir_col = find_col(header, ['操作'])
-
-        for row in body:
-            needed = [key_col]
-            if pct_col is not None:
-                needed.append(pct_col)
-            if dir_col is not None:
-                needed.append(dir_col)
-            if len(row) <= max(needed):
-                continue
-
-            key = strip_markdown_marks(row[key_col]).strip()
-            if not key:
-                continue
-
-            pct = None
-            if pct_col is not None:
-                pct = parse_float_from_text(strip_markdown_marks(row[pct_col]).strip())
-
-            direction = None
-            if dir_col is not None:
-                direction = strip_markdown_marks(row[dir_col]).strip() or None
-
-            pct_disp = format_pct(pct) if pct is not None else '—'
-            dir_disp = direction if direction else '—'
-
-            if pct is None and not direction:
-                display = '—'
-            elif pct is not None:
-                display = f'{pct_disp}（{dir_disp}）'
-            else:
-                display = f'—（{dir_disp}）'
-
-            if key not in out:
-                order.append(key)
-                out[key] = CellCandidate(
-                    display=display,
-                    pct=pct,
-                    direction_raw=direction,
-                    direction_stat=direction_to_stat(direction, is_category=False),
-                    raw_model=raw_model
-                )
+        order.append(key)
+        out[key] = CellCandidate(
+            display=display,
+            pct=pct,
+            direction_raw=direction,
+            direction_stat=direction_to_stat(direction, is_category=False),
+            raw_model=raw_model
+        )
     return order, out
 
 def normalize_topic_name(s: str) -> str:
@@ -384,31 +274,7 @@ def parse_themes(text: str, raw_model: str) -> Tuple[List[ThemeEntry], bool]:
     
     explicitly_no_new = bool(re.search(r'本周期不新增|不新增|无新增|无需新增', remaining))
     
-    if not table:
-        section_lines = extract_section_lines(text, '新的定投方向建议')
-        entries = []
-        for ln in section_lines:
-            m = re.match(r'^\s*(?:\d+[\.\、]|[-*])\s*(.+)$', ln.strip())
-            if not m:
-                continue
-            item = m.group(1).strip()
-            item = strip_markdown_marks(item)
-            m_topic = re.match(r'^(.*?)\s*(?:[-—–]\s+)(.+)$', item)
-            if m_topic:
-                topic = m_topic.group(1).strip()
-            else:
-                topic = item.strip()
-            if not topic:
-                continue
-            entries.append(ThemeEntry(
-                topic=topic,
-                topic_norm=normalize_topic_name(topic),
-                pct=None,
-                caliber='—',
-                display='—',
-                raw_model=raw_model
-            ))
-        return entries, explicitly_no_new
+    if not table: return [], explicitly_no_new
 
     header = table[0]
     body = table[1:]
@@ -424,32 +290,15 @@ def parse_themes(text: str, raw_model: str) -> Tuple[List[ThemeEntry], bool]:
 
     if topic_col is None or pct_col is None or caliber_col is None:
         return [], explicitly_no_new
-    
-    def remove_pct_from_caliber(caliber: str) -> str:
-        if not caliber:
-            return '—'
-        cleaned = re.sub(r'\s*的?\s*-?\d+(?:\.\d+)?\s*%?\s*', '', caliber, count=1).strip()
-        if cleaned.endswith('的'):
-            cleaned = cleaned[:-1].strip()
-        return cleaned or '—'
 
     entries = []
     for row in body:
         if len(row) <= max(topic_col, pct_col, caliber_col): continue
-        topic = strip_markdown_marks(row[topic_col]).strip()
+        topic = row[topic_col].strip()
         if not topic or topic in ['无', '—', '-']: continue
         
-        pct_cell = strip_markdown_marks(row[pct_col]).strip()
-        caliber_cell = strip_markdown_marks(row[caliber_col]).strip()
-        
-        pct = parse_float_from_text(pct_cell)
-        caliber = caliber_cell or '—'
-        
-        if pct is None:
-            pct_alt = parse_float_from_text(caliber_cell)
-            if pct_alt is not None and (not pct_cell or pct_cell in {'—', '-', '新增方向'}):
-                pct = pct_alt
-                caliber = remove_pct_from_caliber(caliber_cell)
+        pct = parse_float_from_text(row[pct_col])
+        caliber = row[caliber_col].strip() or '—'
         
         display = '—'
         if pct is not None:
@@ -584,23 +433,19 @@ def render_table(headers: List[str], rows: List[List[str]]) -> str:
 # --- Main Execution ---
 
 def main():
-    args = parse_args()
-    report_date = args.report_date
-    input_dir, output_dir, output_path, file_re = paths_for(report_date)
-
-    if not input_dir.exists():
-        print(f"Input dir {input_dir} does not exist.")
+    if not INPUT_DIR.exists():
+        print(f"Input dir {INPUT_DIR} does not exist.")
         return
 
     files = []
-    for p in input_dir.iterdir():
+    for p in INPUT_DIR.iterdir():
         if not p.is_file(): continue
-        m = file_re.match(p.name)
+        m = FILE_RE.match(p.name)
         if m:
             files.append((p, m.group(1)))
     
     if not files:
-        print(f"No files matching pattern in {input_dir}")
+        print(f"No files matching pattern in {INPUT_DIR}")
         return
 
     parsed_models = []
@@ -819,7 +664,7 @@ def main():
 
     # Output Markdown
     md = []
-    md.append(f'# 投资总结（{report_date}）\n')
+    md.append(f'# 投资总结（{DATE}）\n')
     
     md.append(f'## 1. 大板块比例调整建议（按大类横向对比）')
     md.append(render_table(['大板块'] + model_cols + ['一致性', '分歧摘要'], cat_rows))
@@ -834,9 +679,9 @@ def main():
     md.append(f'\n## 3. 新的定投方向建议（按主题横向对比）')
     md.append(render_table(['主题/方向'] + model_cols + ['异同'], theme_rows))
     
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path.write_text('\n'.join(md), encoding='utf-8')
-    print(f"Successfully generated: {output_path}")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_PATH.write_text('\n'.join(md), encoding='utf-8')
+    print(f"Successfully generated: {OUTPUT_PATH}")
 
 if __name__ == '__main__':
     main()
