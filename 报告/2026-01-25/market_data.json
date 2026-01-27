@@ -1,0 +1,88 @@
+{
+  "fetched_at": "2026-01-25",
+  "fred": {
+    "DGS10": {
+      "id": "DGS10",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10",
+      "date": "2026-01-22",
+      "value": 4.26
+    },
+    "DGS2": {
+      "id": "DGS2",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2",
+      "date": "2026-01-22",
+      "value": 3.61
+    },
+    "DFII10": {
+      "id": "DFII10",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10",
+      "date": "2026-01-22",
+      "value": 1.95
+    },
+    "T10Y2Y": {
+      "id": "T10Y2Y",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y",
+      "date": "2026-01-23",
+      "value": 0.64
+    },
+    "DTWEXBGS": {
+      "id": "DTWEXBGS",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTWEXBGS",
+      "date": "2026-01-16",
+      "value": 120.4478
+    },
+    "T10YIE": {
+      "id": "T10YIE",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10YIE",
+      "date": "2026-01-23",
+      "value": 2.32
+    },
+    "GVZCLS": {
+      "id": "GVZCLS",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=GVZCLS",
+      "date": "2026-01-22",
+      "value": 28.11
+    }
+  },
+  "funds": {
+    "004854": {
+      "fund_code": "004854",
+      "url": "https://fundgz.1234567.com.cn/js/004854.js",
+      "data": {
+        "fundcode": "004854",
+        "name": "广发中证全指汽车指数A",
+        "jzrq": "2026-01-22",
+        "dwjz": "1.7909",
+        "gsz": "1.8013",
+        "gszzl": "0.58",
+        "gztime": "2026-01-23 15:00"
+      }
+    },
+    "015876": {
+      "fund_code": "015876",
+      "url": "https://fundgz.1234567.com.cn/js/015876.js",
+      "data": {
+        "fundcode": "015876",
+        "name": "富国中证消费电子主题ETF发起式联接A",
+        "jzrq": "2026-01-22",
+        "dwjz": "1.6681",
+        "gsz": "1.6664",
+        "gszzl": "-0.10",
+        "gztime": "2026-01-23 15:00"
+      }
+    },
+    "007466": {
+      "fund_code": "007466",
+      "url": "https://fundgz.1234567.com.cn/js/007466.js",
+      "data": {
+        "fundcode": "007466",
+        "name": "华泰柏瑞中证红利低波ETF联接A",
+        "jzrq": "2026-01-22",
+        "dwjz": "1.6220",
+        "gsz": "1.6153",
+        "gszzl": "-0.41",
+        "gztime": "2026-01-23 15:00"
+      }
+    }
+  }
+}

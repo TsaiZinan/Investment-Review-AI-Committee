@@ -1,0 +1,275 @@
+{
+  "fetched_at": "2026-01-27",
+  "fred": {
+    "DGS10": {
+      "id": "DGS10",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10",
+      "date": "2026-01-23",
+      "value": 4.24
+    },
+    "DGS2": {
+      "id": "DGS2",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2",
+      "date": "2026-01-23",
+      "value": 3.6
+    },
+    "DFII10": {
+      "id": "DFII10",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10",
+      "date": "2026-01-23",
+      "value": 1.92
+    },
+    "T10Y2Y": {
+      "id": "T10Y2Y",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10Y2Y",
+      "date": "2026-01-26",
+      "value": 0.66
+    },
+    "DTWEXBGS": {
+      "id": "DTWEXBGS",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTWEXBGS",
+      "date": "2026-01-23",
+      "value": 119.2855
+    },
+    "T10YIE": {
+      "id": "T10YIE",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=T10YIE",
+      "date": "2026-01-26",
+      "value": 2.32
+    },
+    "GVZCLS": {
+      "id": "GVZCLS",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=GVZCLS",
+      "date": "2026-01-23",
+      "value": 30.01
+    }
+  },
+  "funds": {
+    "013138": {
+      "fund_code": "013138",
+      "url": "https://fundgz.1234567.com.cn/js/013138.js",
+      "data": {
+        "fundcode": "013138",
+        "name": "上银中债5-10年国开行债券指数A",
+        "jzrq": "2026-01-26",
+        "dwjz": "1.0892",
+        "gsz": "1.0889",
+        "gszzl": "-0.0184",
+        "gztime": "2026-01-27 11:01"
+      }
+    },
+    "006961": {
+      "fund_code": "006961",
+      "url": "https://fundgz.1234567.com.cn/js/006961.js",
+      "data": {
+        "fundcode": "006961",
+        "name": "南方中债7-10年国开行债券指数A",
+        "jzrq": "2026-01-26",
+        "dwjz": "1.3567",
+        "gsz": "1.3564",
+        "gszzl": "-0.0219",
+        "gztime": "2026-01-27 11:02"
+      }
+    },
+    "004854": {
+      "fund_code": "004854",
+      "url": "https://fundgz.1234567.com.cn/js/004854.js",
+      "data": {
+        "fundcode": "004854",
+        "name": "广发中证全指汽车指数A",
+        "jzrq": "2026-01-26",
+        "dwjz": "1.7692",
+        "gsz": "1.7670",
+        "gszzl": "-0.12",
+        "gztime": "2026-01-27 11:00"
+      }
+    },
+    "015876": {
+      "fund_code": "015876",
+      "url": "https://fundgz.1234567.com.cn/js/015876.js",
+      "data": {
+        "fundcode": "015876",
+        "name": "富国中证消费电子主题ETF发起式联接A",
+        "jzrq": "2026-01-26",
+        "dwjz": "1.6315",
+        "gsz": "1.6459",
+        "gszzl": "0.88",
+        "gztime": "2026-01-27 11:00"
+      }
+    },
+    "002987": {
+      "fund_code": "002987",
+      "url": "https://fundgz.1234567.com.cn/js/002987.js",
+      "data": {
+        "fundcode": "002987",
+        "name": "广发沪深300ETF联接C",
+        "jzrq": "2026-01-26",
+        "dwjz": "1.7691",
+        "gsz": "1.7778",
+        "gszzl": "0.49",
+        "gztime": "2026-01-27 11:00"
+      }
+    },
+    "013601": {
+      "fund_code": "013601",
+      "url": "https://fundgz.1234567.com.cn/js/013601.js",
+      "data": {
+        "fundcode": "013601",
+        "name": "国泰中证光伏产业ETF发起联接A",
+        "jzrq": "2026-01-26",
+        "dwjz": "0.6828",
+        "gsz": "0.6665",
+        "gszzl": "-2.39",
+        "gztime": "2026-01-27 11:00"
+      }
+    },
+    "014776": {
+      "fund_code": "014776",
+      "url": "https://fundgz.1234567.com.cn/js/014776.js",
+      "data": {
+        "fundcode": "014776",
+        "name": "富国中证芯片产业ETF发起式联接A",
+        "jzrq": "2026-01-26",
+        "dwjz": "1.4288",
+        "gsz": "1.4522",
+        "gszzl": "1.64",
+        "gztime": "2026-01-27 11:00"
+      }
+    },
+    "015789": {
+      "fund_code": "015789",
+      "url": "https://fundgz.1234567.com.cn/js/015789.js",
+      "data": {
+        "fundcode": "015789",
+        "name": "永赢高端装备智选混合发起A",
+        "jzrq": "2026-01-26",
+        "dwjz": "1.6574",
+        "gsz": "1.6399",
+        "gszzl": "-1.06",
+        "gztime": "2026-01-27 11:00"
+      }
+    },
+    "012737": {
+      "fund_code": "012737",
+      "url": "https://fundgz.1234567.com.cn/js/012737.js",
+      "data": {
+        "fundcode": "012737",
+        "name": "广发创新药ETF联接A",
+        "jzrq": "2026-01-26",
+        "dwjz": "0.6129",
+        "gsz": "0.6007",
+        "gszzl": "-1.99",
+        "gztime": "2026-01-27 11:01"
+      }
+    },
+    "019670": {
+      "fund_code": "019670",
+      "url": "https://fundgz.1234567.com.cn/js/019670.js",
+      "data": null
+    },
+    "007466": {
+      "fund_code": "007466",
+      "url": "https://fundgz.1234567.com.cn/js/007466.js",
+      "data": {
+        "fundcode": "007466",
+        "name": "华泰柏瑞中证红利低波ETF联接A",
+        "jzrq": "2026-01-26",
+        "dwjz": "1.6246",
+        "gsz": "1.6262",
+        "gszzl": "0.10",
+        "gztime": "2026-01-27 11:00"
+      }
+    },
+    "004642": {
+      "fund_code": "004642",
+      "url": "https://fundgz.1234567.com.cn/js/004642.js",
+      "data": {
+        "fundcode": "004642",
+        "name": "南方中证房地产ETF发起联接A",
+        "jzrq": "2026-01-26",
+        "dwjz": "0.5876",
+        "gsz": "0.5755",
+        "gszzl": "-2.06",
+        "gztime": "2026-01-27 11:00"
+      }
+    },
+    "004432": {
+      "fund_code": "004432",
+      "url": "https://fundgz.1234567.com.cn/js/004432.js",
+      "data": {
+        "fundcode": "004432",
+        "name": "南方中证申万有色金属ETF发起联接A",
+        "jzrq": "2026-01-26",
+        "dwjz": "2.3512",
+        "gsz": "2.3686",
+        "gszzl": "0.74",
+        "gztime": "2026-01-27 11:01"
+      }
+    },
+    "019005": {
+      "fund_code": "019005",
+      "url": "https://fundgz.1234567.com.cn/js/019005.js",
+      "data": {
+        "fundcode": "019005",
+        "name": "国投瑞银白银期货(LOF)C",
+        "jzrq": "2026-01-26",
+        "dwjz": "2.9427",
+        "gsz": "2.9426",
+        "gszzl": "0.00",
+        "gztime": "2026-01-27 11:00"
+      }
+    },
+    "000217": {
+      "fund_code": "000217",
+      "url": "https://fundgz.1234567.com.cn/js/000217.js",
+      "data": {
+        "fundcode": "000217",
+        "name": "华安黄金ETF联接C",
+        "jzrq": "2026-01-26",
+        "dwjz": "3.8623",
+        "gsz": "3.8439",
+        "gszzl": "-0.48",
+        "gztime": "2026-01-27 11:02"
+      }
+    },
+    "270023": {
+      "fund_code": "270023",
+      "url": "https://fundgz.1234567.com.cn/js/270023.js",
+      "data": {
+        "fundcode": "270023",
+        "name": "广发全球精选股票(QDII)人民币A",
+        "jzrq": "2026-01-23",
+        "dwjz": "4.9598",
+        "gsz": "4.9802",
+        "gszzl": "0.41",
+        "gztime": "2026-01-27 05:00"
+      }
+    },
+    "006479": {
+      "fund_code": "006479",
+      "url": "https://fundgz.1234567.com.cn/js/006479.js",
+      "data": {
+        "fundcode": "006479",
+        "name": "广发纳斯达克100ETF联接人民币(QDII)C",
+        "jzrq": "2026-01-23",
+        "dwjz": "7.2553",
+        "gsz": "7.2843",
+        "gszzl": "0.40",
+        "gztime": "2026-01-27 05:00"
+      }
+    },
+    "000369": {
+      "fund_code": "000369",
+      "url": "https://fundgz.1234567.com.cn/js/000369.js",
+      "data": {
+        "fundcode": "000369",
+        "name": "广发全球医疗保健指数人民币(QDII)A",
+        "jzrq": "2026-01-23",
+        "dwjz": "2.5640",
+        "gsz": "2.5750",
+        "gszzl": "0.43",
+        "gztime": "2026-01-27 05:00"
+      }
+    }
+  }
+}

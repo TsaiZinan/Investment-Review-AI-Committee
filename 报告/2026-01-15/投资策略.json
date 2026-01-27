@@ -1,0 +1,266 @@
+{
+  "allocation_summary": [
+    {
+      "category": "债券",
+      "ratio": 0.25,
+      "weekly_amount_target": 1000
+    },
+    {
+      "category": "中股",
+      "ratio": 0.45,
+      "weekly_amount_target": 1800
+    },
+    {
+      "category": "期货",
+      "ratio": 0.1,
+      "weekly_amount_target": 400
+    },
+    {
+      "category": "黄金",
+      "ratio": 0.12,
+      "weekly_amount_target": 480
+    },
+    {
+      "category": "美股",
+      "ratio": 0.08,
+      "weekly_amount_target": 320
+    }
+  ],
+  "investment_plan": [
+    {
+      "category": "债券",
+      "sub_category": "国债",
+      "ratio_in_category": 0.5,
+      "fund_code": "000018",
+      "fund_name": "华夏短债债券A",
+      "weekly_amount": 500,
+      "day_of_week": "周一",
+      "long_term_assessment": "低风险稳定收益",
+      "mid_term_assessment": "利率下行利好",
+      "short_term_assessment": "流动性充足",
+      "current_holding": 5000
+    },
+    {
+      "category": "债券",
+      "sub_category": "国债",
+      "ratio_in_category": 0.25,
+      "fund_code": "012925",
+      "fund_name": "上银中债5-10年国开行债券指数A",
+      "weekly_amount": 250,
+      "day_of_week": "周三",
+      "long_term_assessment": "中久期利率债",
+      "mid_term_assessment": "降息周期利好",
+      "short_term_assessment": "收益率曲线平坦化",
+      "current_holding": 2500
+    },
+    {
+      "category": "债券",
+      "sub_category": "国债",
+      "ratio_in_category": 0.25,
+      "fund_code": "004598",
+      "fund_name": "南方中债7-10年国开行债券指数A",
+      "weekly_amount": 250,
+      "day_of_week": "周四",
+      "long_term_assessment": "长久期利率债",
+      "mid_term_assessment": "降息预期强烈",
+      "short_term_assessment": "配置需求旺盛",
+      "current_holding": 2500
+    },
+    {
+      "category": "中股",
+      "sub_category": "汽车",
+      "ratio_in_category": 0.1167,
+      "fund_code": "004854",
+      "fund_name": "广发汽车指数A",
+      "weekly_amount": 210,
+      "day_of_week": "周一",
+      "long_term_assessment": "汽车出海有成长空间",
+      "mid_term_assessment": "汽车出海，新增长点",
+      "short_term_assessment": "26汽车补贴预期",
+      "current_holding": 2333
+    },
+    {
+      "category": "中股",
+      "sub_category": "消费电子",
+      "ratio_in_category": 0.1167,
+      "fund_code": "012323",
+      "fund_name": "富国中证消费电子主题ETF联接A",
+      "weekly_amount": 210,
+      "day_of_week": "周二",
+      "long_term_assessment": "消费电子升级趋势",
+      "mid_term_assessment": "新品周期到来",
+      "short_term_assessment": "补贴预期已计价",
+      "current_holding": 2333
+    },
+    {
+      "category": "中股",
+      "sub_category": "中证",
+      "ratio_in_category": 0.1556,
+      "fund_code": "002987",
+      "fund_name": "广发沪深300ETF联接C",
+      "weekly_amount": 280,
+      "day_of_week": "周四",
+      "long_term_assessment": "宽基指数长期价值",
+      "mid_term_assessment": "经济复苏预期",
+      "short_term_assessment": "政策托底+估值",
+      "current_holding": 3000
+    },
+    {
+      "category": "中股",
+      "sub_category": "光伏",
+      "ratio_in_category": 0.1167,
+      "fund_code": "012841",
+      "fund_name": "国泰中证光伏产业ETF联接A",
+      "weekly_amount": 210,
+      "day_of_week": "周三",
+      "long_term_assessment": "新能源长期赛道",
+      "mid_term_assessment": "产能过剩压力",
+      "short_term_assessment": "景气弱复苏",
+      "current_holding": 2333
+    },
+    {
+      "category": "中股",
+      "sub_category": "芯片",
+      "ratio_in_category": 0.1167,
+      "fund_code": "012920",
+      "fund_name": "富国中证芯片产业ETF联接A",
+      "weekly_amount": 210,
+      "day_of_week": "周四",
+      "long_term_assessment": "半导体国产替代",
+      "mid_term_assessment": "AI芯片需求增长",
+      "short_term_assessment": "估值偏高",
+      "current_holding": 2333
+    },
+    {
+      "category": "中股",
+      "sub_category": "商业航天",
+      "ratio_in_category": 0.0778,
+      "fund_code": "016455",
+      "fund_name": "永赢高端装备智选混合A",
+      "weekly_amount": 140,
+      "day_of_week": "周四",
+      "long_term_assessment": "高端装备发展前景",
+      "mid_term_assessment": "政策支持力度大",
+      "short_term_assessment": "主题波动偏高",
+      "current_holding": 1500
+    },
+    {
+      "category": "中股",
+      "sub_category": "创新药",
+      "ratio_in_category": 0.0778,
+      "fund_code": "012737",
+      "fund_name": "广发创新药产业ETF联接A",
+      "weekly_amount": 140,
+      "day_of_week": "周三",
+      "long_term_assessment": "创新药长期成长",
+      "mid_term_assessment": "医保谈判影响",
+      "short_term_assessment": "估值修复弹性",
+      "current_holding": 1500
+    },
+    {
+      "category": "中股",
+      "sub_category": "创新药",
+      "ratio_in_category": 0.0778,
+      "fund_code": "015126",
+      "fund_name": "广发港股创新药ETF联接(QDII)A",
+      "weekly_amount": 140,
+      "day_of_week": "周二",
+      "long_term_assessment": "港股创新药估值优势",
+      "mid_term_assessment": "国际资本流入",
+      "short_term_assessment": "估值修复弹性",
+      "current_holding": 1500
+    },
+    {
+      "category": "期货",
+      "sub_category": "有色",
+      "ratio_in_category": 0.6,
+      "fund_code": "004433",
+      "fund_name": "南方中证申万有色金属ETF联接A",
+      "weekly_amount": 240,
+      "day_of_week": "周二",
+      "long_term_assessment": "大宗商品长期周期",
+      "mid_term_assessment": "全球经济复苏预期",
+      "short_term_assessment": "资金拥挤风险",
+      "current_holding": 2000
+    },
+    {
+      "category": "期货",
+      "sub_category": "白银",
+      "ratio_in_category": 0.2,
+      "fund_code": "161226",
+      "fund_name": "国投瑞银白银期货(LOF)C",
+      "weekly_amount": 80,
+      "day_of_week": "周二",
+      "long_term_assessment": "白银工业需求增长",
+      "mid_term_assessment": "贵金属价格联动",
+      "short_term_assessment": "波动高回撤大",
+      "current_holding": 667
+    },
+    {
+      "category": "黄金",
+      "sub_category": "黄金ETF",
+      "ratio_in_category": 1.0,
+      "fund_code": "518880",
+      "fund_name": "华安黄金ETF联接A",
+      "weekly_amount": 480,
+      "day_of_week": "周一",
+      "long_term_assessment": "通胀对冲工具",
+      "mid_term_assessment": "地缘风险支撑",
+      "short_term_assessment": "央行购金+降息",
+      "current_holding": 4000
+    },
+    {
+      "category": "美股",
+      "sub_category": "科技",
+      "ratio_in_category": 0.5,
+      "fund_code": "270002",
+      "fund_name": "广发全球精选股票(QDII)A",
+      "weekly_amount": 160,
+      "day_of_week": "周二",
+      "long_term_assessment": "全球科技龙头",
+      "mid_term_assessment": "AI产业爆发",
+      "short_term_assessment": "分散但降风险",
+      "current_holding": 1333
+    },
+    {
+      "category": "美股",
+      "sub_category": "科技",
+      "ratio_in_category": 0.3,
+      "fund_code": "006479",
+      "fund_name": "广发纳斯达克100ETF联接(QDII)C",
+      "weekly_amount": 96,
+      "day_of_week": "周三",
+      "long_term_assessment": "纳斯达克长期增长",
+      "mid_term_assessment": "科技股业绩超预期",
+      "short_term_assessment": "集中度高",
+      "current_holding": 800
+    },
+    {
+      "category": "美股",
+      "sub_category": "医疗保健",
+      "ratio_in_category": 0.2,
+      "fund_code": "000369",
+      "fund_name": "广发全球医疗保健指数(QDII)A",
+      "weekly_amount": 64,
+      "day_of_week": "周一",
+      "long_term_assessment": "全球医疗保健需求",
+      "mid_term_assessment": "老龄化趋势利好",
+      "short_term_assessment": "防御属性更强",
+      "current_holding": 534
+    }
+  ],
+  "non_investment_holdings": [
+    {
+      "category": "中股",
+      "sub_category": "北证",
+      "fund_name": "易方达北证50指数C",
+      "current_holding": 2787.55
+    },
+    {
+      "category": "现金",
+      "sub_category": "货币基金",
+      "fund_name": "余额宝",
+      "current_holding": 10000
+    }
+  ]
+}
