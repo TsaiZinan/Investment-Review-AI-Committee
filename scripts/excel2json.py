@@ -1,11 +1,15 @@
 import pandas as pd
 import json
-import os
 import sys
+import datetime
+from pathlib import Path
 
-# 设置输入输出路径
-input_file = 'Data/投资策略.xlsx'
-output_file = '报告/2026-01-26/投资策略.json'
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_FILE = PROJECT_ROOT / "Data/投资策略.xlsx"
+REPORTS_DIR = PROJECT_ROOT / "报告"
+
+def get_today_str():
+    return datetime.datetime.now().strftime("%Y-%m-%d")
 
 def convert_excel_to_json(input_path, output_path):
     print(f"Reading {input_path}...")
@@ -90,6 +94,7 @@ def convert_excel_to_json(input_path, output_path):
             "占对应大板块比例": "ratio_in_category",
             "基金代码": "fund_code",
             "基金名": "fund_name",
+            "基金名称": "fund_name",
             "周定投额": "weekly_amount",
             "定投日期": "day_of_week",
             "长期评估": "long_term_assessment",
@@ -116,9 +121,15 @@ def convert_excel_to_json(input_path, output_path):
                 for field, col_idx in col_map.items():
                     val = row.iloc[col_idx]
                     if field == "fund_code":
-                        item[field] = str(val).zfill(6) if pd.notna(val) else None
-                        if item[field] and item[field].endswith('.0'): # 处理被读成 float 的情况
-                            item[field] = item[field][:-2].zfill(6)
+                        if not pd.notna(val) or str(val).strip() == "":
+                            item[field] = None
+                        else:
+                            code = str(val).strip()
+                            if code.endswith(".0"):
+                                code = code[:-2]
+                            if code.isdigit() and len(code) < 6:
+                                code = code.zfill(6)
+                            item[field] = code
                     elif field in ["ratio_in_category", "weekly_amount", "current_holding"]:
                         try:
                             item[field] = float(val) if pd.notna(val) else None
@@ -176,9 +187,13 @@ def convert_excel_to_json(input_path, output_path):
             current_row += 1
 
     # 输出 JSON
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     print(f"Successfully converted to {output_path}")
 
 if __name__ == "__main__":
-    convert_excel_to_json(input_file, output_file)
+    date_str = sys.argv[1] if len(sys.argv) >= 2 else get_today_str()
+    input_path = DATA_FILE
+    output_path = REPORTS_DIR / date_str / "投资策略.json"
+    convert_excel_to_json(input_path, output_path)

@@ -82,6 +82,37 @@ def parse_markdown_table(lines: List[str]) -> List[List[str]]:
     return rows
 
 
+def iter_markdown_tables(text: str) -> List[List[List[str]]]:
+    lines = text.splitlines()
+    tables: List[List[List[str]]] = []
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip().startswith("|"):
+            i += 1
+            continue
+        table_lines: List[str] = []
+        while i < len(lines) and lines[i].strip().startswith("|"):
+            table_lines.append(lines[i])
+            i += 1
+        parsed = parse_markdown_table(table_lines)
+        if parsed and len(parsed) >= 2:
+            tables.append(parsed)
+    return tables
+
+
+def find_table_anywhere(
+    text: str, header_must: List[str], header_must_not: List[str] = []
+) -> Optional[List[List[str]]]:
+    for table in iter_markdown_tables(text):
+        header = table[0]
+        if not all(any(k in h for h in header) for k in header_must):
+            continue
+        if any(any(k in h for h in header) for k in header_must_not):
+            continue
+        return table
+    return None
+
+
 def is_separator_row(row: List[str]) -> bool:
     return all(re.fullmatch(r":?-{3,}:?", c.replace(" ", "")) is not None for c in row)
 
@@ -195,6 +226,8 @@ def cell_display(pct: Optional[float], direction: Optional[str]) -> str:
 def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCandidate]]:
     table, _ = find_table_after_heading(text, "大板块比例调整建议")
     if not table or len(table) < 2:
+        table = find_table_anywhere(text, ["大板块", "建议%"], ["标的"])
+    if not table or len(table) < 2:
         return [], {}
     header = table[0]
     body = table[1:]
@@ -230,6 +263,8 @@ def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, Ce
 
 def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCandidate]]:
     table, _ = find_table_after_heading(text, "定投计划逐项建议")
+    if not table or len(table) < 2:
+        table = find_table_anywhere(text, ["标的", "建议%"])
     if not table or len(table) < 2:
         return [], {}
     header = table[0]
@@ -325,11 +360,14 @@ def parse_themes(text: str, raw_model: str) -> Tuple[List[ThemeEntry], bool]:
         return [], explicitly_no_new
 
     entries: List[ThemeEntry] = []
+    no_topic_re = re.compile(r"^[（(]?\s*无\s*[)）]?$")
     for row in body:
         if len(row) <= max(topic_col, pct_col, caliber_col):
             continue
         topic = row[topic_col].strip()
-        if not topic or topic in ["无", "—", "-"]:
+        if not topic or topic in ["无", "—", "-"] or no_topic_re.fullmatch(topic):
+            if no_topic_re.fullmatch(topic):
+                explicitly_no_new = True
             continue
         pct = parse_float_from_text(row[pct_col])
         caliber = row[caliber_col].strip() or "—"
@@ -645,4 +683,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

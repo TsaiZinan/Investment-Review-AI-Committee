@@ -1,0 +1,18 @@
+- 日期文件夹：报告/2026-01-28/
+- 当前阶段：6
+- 完成度：100%
+- 阶段明细：
+  - [x] 1) 检查/创建日期文件夹
+  - [x] 2) 生成/复用投资策略.json
+  - [x] 3) 生成投资简报_Qwen-3-Coder.md
+  - [x] 4) 联网数据搜集完成
+  - [x] 5) 输出并保存投资建议报告
+  - [x] 6) 校验文件命名、标的命名并清理无关文件（最后检查）
+- 产物清单：
+  - 投资策略.json：报告/2026-01-28/投资策略.json
+  - 投资简报_Qwen-3-Coder.md：报告/2026-01-28/简报/投资简报_Qwen-3-Coder.md
+  - 投资建议报告：报告/2026-01-28/2026-01-28_Qwen-3-Coder_投资建议.md
+  - 命名校验：通过
+  - 基金标的覆盖校验：通过
+  - 标的名称一致性校验：通过
+  - 清理记录：已清理临时脚本文件：generate_investment_recommendations.py, generate_investment_brief.py, convert_excel_to_json.py, read_excel.py

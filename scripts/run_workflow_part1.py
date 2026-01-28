@@ -5,11 +5,20 @@ import sys
 from datetime import date
 from pathlib import Path
 import re
+import argparse
+
+# --- Command Line Arguments ---
+parser = argparse.ArgumentParser()
+parser.add_argument('--model', type=str, default="Gemini-3-Pro-Preview", help='Model name')
+parser.add_argument('--date', type=str, default=date.today().isoformat(), help='Date in YYYY-MM-DD format')
+parser.add_argument('--fetch', action='store_true', help='Fetch market data')
+parser.add_argument('--validate', action='store_true', help='Validate files')
+args = parser.parse_args()
 
 # --- Configuration ---
-MODEL_NAME = "Gemini-3-Pro-Preview"
-TODAY = date.today().isoformat()
-ROOT_DIR = Path("/Users/cai/Desktop/SynologyDrive/Project/#ProjectLife-000000-理财")
+MODEL_NAME = args.model
+TODAY = args.date
+ROOT_DIR = Path("/Users/cai/SynologyDrive/Project/#ProjectLife-000000-理财")
 REPORT_DIR = ROOT_DIR / f"报告/{TODAY}"
 PROGRESS_DIR = REPORT_DIR / "进度"
 BRIEF_DIR = REPORT_DIR / "简报"
