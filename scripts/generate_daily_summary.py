@@ -1,4 +1,8 @@
+import argparse
+import json
 import re
+import subprocess
+import sys
 import unicodedata
 from dataclasses import dataclass
 from datetime import date
@@ -7,15 +11,8 @@ from typing import Dict, List, Optional, Tuple, Set
 
 # Configuration
 ROOT = Path.cwd()
-DATE = date.today().isoformat()
-# Ensure we are using the correct date if system time differs, but here we trust env.
-# If user wanted a specific date, we might need an argument, but prompt says "当天日期".
-
-INPUT_DIR = ROOT / '报告' / DATE
+DEFAULT_DATE = date.today().isoformat()
 OUTPUT_DIR = ROOT / '每日最终报告'
-OUTPUT_PATH = OUTPUT_DIR / f'{DATE}_最终投资总结.md'
-
-FILE_RE = re.compile(rf'^{re.escape(DATE)}_(.+)_投资建议\.md$')
 
 # Model Order
 MODEL_ORDER_FIXED = [
@@ -132,15 +129,35 @@ class ThemeEntry:
     raw_model: str
 
 @dataclass
+class ItemEntry:
+    name: str
+    name_norm: str
+    candidate: CellCandidate
+    canonical_model: str
+
+@dataclass
 class ModelParsed:
     raw_model: str
     canonical_model: str
     categories: Dict[str, CellCandidate]
     items: Dict[str, CellCandidate]
+    top_changes: List['TopChangeEntry']
     themes: List[ThemeEntry]
     explicitly_no_new: bool
     cat_order: List[str]
     item_order: List[str]
+
+@dataclass
+class TopChangeEntry:
+    item: str
+    item_norm: str
+    direction_raw: Optional[str]
+    direction_stat: Optional[str]
+    from_pct: Optional[float]
+    to_pct: Optional[float]
+    reason: str
+    raw_model: str
+    canonical_model: str
 
 # --- Logic ---
 
@@ -269,12 +286,215 @@ def topic_tokens(norm: str) -> List[str]:
     if len(norm) >= 2: return [norm[i:i+2] for i in range(len(norm)-1)]
     return [norm]
 
+def normalize_item_name(s: str) -> str:
+    if not s:
+        return ''
+    t = unicodedata.normalize('NFKC', s)
+    t = t.strip().lower()
+    t = t.replace('（', '(').replace('）', ')')
+    t = re.sub(r'\s+', '', t)
+    t = re.sub(r'(?<!\d)\d{6}(?!\d)', '', t)
+    t = t.replace('创新药产业', '创新药')
+    t = t.replace('人民币', '')
+    t = t.replace('中证申万', '')
+    t = t.replace('中证全指', '')
+    t = t.replace('中证', '')
+    t = t.replace('申万', '')
+    t = t.replace('全指', '')
+    t = t.replace('发起式', '').replace('发起', '')
+    t = re.sub(r'[\[\]{}<>《》“”"\'`]', '', t)
+    t = t.replace('(', '').replace(')', '')
+    t = re.sub(r'^华安黄金etf联接[abc]?$', '华安黄金', t)
+    return t
+
+def item_tokens(norm: str) -> List[str]:
+    if not norm:
+        return []
+    if len(norm) >= 2:
+        return [norm[i:i+2] for i in range(len(norm) - 1)]
+    return [norm]
+
+def item_norm_similar(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    ma = re.match(r'[\u4e00-\u9fff]{2,4}', a)
+    mb = re.match(r'[\u4e00-\u9fff]{2,4}', b)
+    if ma and mb and ma.group(0) != mb.group(0):
+        return False
+    if a == b:
+        return True
+    if a in b or b in a:
+        if min(len(a), len(b)) >= 6:
+            return True
+    ta = set(item_tokens(a))
+    tb = set(item_tokens(b))
+    inter = len(ta & tb)
+    if inter < 10:
+        return False
+    union = len(ta | tb)
+    if union == 0:
+        return False
+    return (inter / union) >= 0.60
+
+def item_norm_variants(norm: str) -> Set[str]:
+    if not norm:
+        return set()
+    out = {norm}
+    out.add(re.sub(r'[abc]$', '', norm))
+    out.add(re.sub(r'(?:联接)?[abc]$', '', norm))
+    out = {x for x in out if x}
+    return out
+
+def jaccard_bigrams(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    ta = set(item_tokens(a))
+    tb = set(item_tokens(b))
+    if not ta or not tb:
+        return 0.0
+    inter = len(ta & tb)
+    union = len(ta | tb)
+    if union == 0:
+        return 0.0
+    return inter / union
+
+def load_strategy_investment_plan_items(date_str: str) -> Tuple[Optional[Path], List[Dict]]:
+    input_dir = ROOT / '报告' / date_str
+    strategy_path = input_dir / '投资策略.json'
+    if not strategy_path.exists():
+        return None, []
+    try:
+        data = json.loads(strategy_path.read_text(encoding='utf-8'))
+    except Exception:
+        return strategy_path, []
+    plan = data.get('investment_plan', [])
+    if not isinstance(plan, list):
+        return strategy_path, []
+    cleaned = []
+    for row in plan:
+        if not isinstance(row, dict):
+            continue
+        name = (row.get('fund_name') or '').strip()
+        code = (row.get('fund_code') or '').strip()
+        if not name and not code:
+            continue
+        cleaned.append({'fund_name': name, 'fund_code': code})
+    return strategy_path, cleaned
+
+@dataclass
+class ItemValidationIssue:
+    file_name: str
+    raw_model: str
+    extra_items: List[str]
+    missing_items: List[str]
+    mapped_name_mismatches: List[Tuple[str, str]]
+
+def validate_report_items_against_strategy(date_str: str, files: List[Tuple[Path, str]]) -> Tuple[bool, List[ItemValidationIssue], str]:
+    strategy_path, plan_items = load_strategy_investment_plan_items(date_str)
+    if not strategy_path:
+        return False, [], f'缺少数据源：报告/{date_str}/投资策略.json'
+    if not plan_items:
+        return False, [], f'数据源无法解析或 investment_plan 为空：报告/{date_str}/投资策略.json'
+
+    source_names = [x['fund_name'] for x in plan_items if x.get('fund_name')]
+    source_names_set = set(source_names)
+    source_norm_to_names: Dict[str, List[str]] = {}
+    for nm in source_names:
+        n = normalize_item_name(nm)
+        for v in item_norm_variants(n):
+            source_norm_to_names.setdefault(v, []).append(nm)
+
+    issues: List[ItemValidationIssue] = []
+    any_fatal_issue = False
+
+    for path, raw_model in files:
+        text = path.read_text(encoding='utf-8')
+        _, items = parse_items(text, raw_model)
+        report_items = list(items.keys())
+        report_items_set = set(report_items)
+
+        mapped_name_mismatches: List[Tuple[str, str]] = []
+        matched_source: Set[str] = set()
+        extra_items: List[str] = []
+
+        for item in report_items:
+            if item in source_names_set:
+                matched_source.add(item)
+                continue
+
+            norm = normalize_item_name(item)
+            candidates = []
+            for v in item_norm_variants(norm):
+                candidates.extend(source_norm_to_names.get(v, []))
+
+            if candidates:
+                best = sorted(set(candidates), key=lambda x: (len(x), x))[0]
+                mapped_name_mismatches.append((item, best))
+                matched_source.add(best)
+                continue
+
+            best_match = None
+            best_score = 0.0
+            for src in source_names:
+                src_norm = normalize_item_name(src)
+                score = jaccard_bigrams(norm, src_norm)
+                if score > best_score:
+                    best_score = score
+                    best_match = src
+
+            if best_match and best_score >= 0.55:
+                mapped_name_mismatches.append((item, best_match))
+                matched_source.add(best_match)
+                continue
+
+            extra_items.append(item)
+
+        missing_items = [nm for nm in source_names if nm not in matched_source and nm not in report_items_set]
+
+        if extra_items or missing_items:
+            any_fatal_issue = True
+            issues.append(ItemValidationIssue(
+                file_name=path.name,
+                raw_model=raw_model,
+                extra_items=sorted(extra_items),
+                missing_items=missing_items,
+                mapped_name_mismatches=sorted(mapped_name_mismatches, key=lambda x: (x[1], x[0])),
+            ))
+        elif mapped_name_mismatches:
+            issues.append(ItemValidationIssue(
+                file_name=path.name,
+                raw_model=raw_model,
+                extra_items=[],
+                missing_items=[],
+                mapped_name_mismatches=sorted(mapped_name_mismatches, key=lambda x: (x[1], x[0])),
+            ))
+
+    return (not any_fatal_issue), issues, f'数据源：报告/{date_str}/投资策略.json（investment_plan={len(source_names)}）'
+
 def parse_themes(text: str, raw_model: str) -> Tuple[List[ThemeEntry], bool]:
+    lines = text.splitlines()
+    start_idx = None
+    for i, ln in enumerate(lines):
+        if '新的定投方向建议' in ln:
+            start_idx = i
+            break
+    intro = ''
+    if start_idx is not None:
+        post_lines = lines[start_idx + 1 :]
+        intro_lines = []
+        for ln in post_lines:
+            if ln.strip().startswith('|') and '|' in ln.strip()[1:]:
+                break
+            if ln.strip().startswith('#'):
+                break
+            intro_lines.append(ln)
+        intro = '\n'.join(intro_lines)
+
     table, remaining = find_table_after_heading(text, '新的定投方向建议')
-    
-    explicitly_no_new = bool(re.search(r'本周期不新增|不新增|无新增|无需新增', remaining))
-    
-    if not table: return [], explicitly_no_new
+    explicitly_no_new = bool(re.search(r'本周期不新增|不新增|无新增|无需新增', (intro + '\n' + remaining)))
+
+    if not table:
+        return [], explicitly_no_new
 
     header = table[0]
     body = table[1:]
@@ -295,7 +515,13 @@ def parse_themes(text: str, raw_model: str) -> Tuple[List[ThemeEntry], bool]:
     for row in body:
         if len(row) <= max(topic_col, pct_col, caliber_col): continue
         topic = row[topic_col].strip()
-        if not topic or topic in ['无', '—', '-']: continue
+        if not topic:
+            continue
+
+        topic_norm = normalize_topic_name(topic)
+        if topic in ['无', '—', '-'] or topic_norm in ['', '无'] or re.fullmatch(r'[\(\（]无[\)\）]', topic.strip()):
+            explicitly_no_new = True
+            continue
         
         pct = parse_float_from_text(row[pct_col])
         caliber = row[caliber_col].strip() or '—'
@@ -306,18 +532,232 @@ def parse_themes(text: str, raw_model: str) -> Tuple[List[ThemeEntry], bool]:
             
         entries.append(ThemeEntry(
             topic=topic,
-            topic_norm=normalize_topic_name(topic),
+            topic_norm=topic_norm,
             pct=pct,
             caliber=caliber,
             display=display,
             raw_model=raw_model
         ))
 
-    if not entries:
-         if bool(re.search(r'本周期不新增|不新增|无新增|无需新增', remaining)):
-            explicitly_no_new = True
+    if not entries and bool(re.search(r'本周期不新增|不新增|无新增|无需新增', (intro + '\n' + remaining))):
+        explicitly_no_new = True
 
     return entries, explicitly_no_new
+
+def parse_top_changes(text: str, raw_model: str, canonical_model: str) -> List[TopChangeEntry]:
+    lines = text.splitlines()
+    start_idx = None
+    for i, ln in enumerate(lines):
+        if '定投增减要点' in ln:
+            start_idx = i
+            break
+    if start_idx is None:
+        return []
+
+    bullet_lines = []
+    for ln in lines[start_idx + 1:]:
+        s = ln.strip()
+        if s.startswith('#'):
+            break
+        if s.startswith(('*', '-')):
+            bullet_lines.append(s)
+
+    out: List[TopChangeEntry] = []
+    for bl in bullet_lines:
+        s = bl.lstrip('*-').strip()
+        if '：' not in s:
+            continue
+        item, rest = s.split('：', 1)
+        item = item.strip()
+        rest = rest.strip()
+        if not item or not rest:
+            continue
+
+        reason = ''
+        if '—' in rest:
+            rest_main, reason = rest.split('—', 1)
+        elif ' - ' in rest:
+            rest_main, reason = rest.split(' - ', 1)
+        else:
+            rest_main = rest
+        reason = reason.strip()
+
+        direction_raw = None
+        for key in ['增持', '减持', '不变', '维持', '暂停', '停止']:
+            if key in rest_main:
+                direction_raw = key
+                break
+
+        nums = re.findall(r'-?\d+(?:\.\d+)?', rest_main.replace(',', ''))
+        from_pct = None
+        to_pct = None
+        if len(nums) >= 2:
+            try:
+                from_pct = float(nums[0])
+                to_pct = float(nums[1])
+            except ValueError:
+                from_pct = None
+                to_pct = None
+
+        out.append(TopChangeEntry(
+            item=item,
+            item_norm=normalize_item_name(item),
+            direction_raw=direction_raw,
+            direction_stat=direction_to_stat(direction_raw, is_category=False) if direction_raw else None,
+            from_pct=from_pct,
+            to_pct=to_pct,
+            reason=reason,
+            raw_model=raw_model,
+            canonical_model=canonical_model,
+        ))
+    return out
+
+def summarize_top_changes_paragraph(models: List[ModelParsed], *, max_chars: int = 1000) -> str:
+    all_entries: List[TopChangeEntry] = []
+    for m in models:
+        all_entries.extend(m.top_changes)
+
+    model_count = len({m.canonical_model for m in models})
+    if not all_entries or model_count == 0:
+        return '当日各报告未提供可解析的“定投增减要点”，因此无法基于该部分做横向综述。'
+
+    @dataclass
+    class ChangeGroup:
+        names: List[str]
+        norms: List[str]
+        entries: List[TopChangeEntry]
+
+    groups: List[ChangeGroup] = []
+    for e in all_entries:
+        placed = False
+        for g in groups:
+            if any(item_norm_similar(e.item_norm, gn) for gn in g.norms):
+                g.names.append(e.item)
+                g.norms.append(e.item_norm)
+                g.entries.append(e)
+                placed = True
+                break
+        if not placed:
+            groups.append(ChangeGroup(names=[e.item], norms=[e.item_norm], entries=[e]))
+
+    def main_name(g: ChangeGroup) -> str:
+        freq: Dict[str, int] = {}
+        for n in g.names:
+            freq[n] = freq.get(n, 0) + 1
+        return sorted(freq.items(), key=lambda x: (-x[1], len(x[0]), x[0]))[0][0]
+
+    def uniq_models(g: ChangeGroup) -> Set[str]:
+        return {e.canonical_model for e in g.entries}
+
+    def dir_counts(g: ChangeGroup) -> Dict[str, int]:
+        c = {'增': 0, '减': 0, '不变': 0, '未知': 0}
+        for e in g.entries:
+            if e.direction_stat in ('增', '减', '不变'):
+                c[e.direction_stat] += 1
+            else:
+                c['未知'] += 1
+        return c
+
+    def avg_delta(g: ChangeGroup) -> Optional[float]:
+        deltas = []
+        for e in g.entries:
+            if e.from_pct is not None and e.to_pct is not None:
+                deltas.append(e.to_pct - e.from_pct)
+        if not deltas:
+            return None
+        return sum(deltas) / len(deltas)
+
+    def reason_snippet(g: ChangeGroup, limit: int = 2) -> str:
+        reasons = [e.reason for e in g.entries if e.reason]
+        if not reasons:
+            return ''
+        freq: Dict[str, int] = {}
+        for r in reasons:
+            rr = r.strip()
+            if not rr:
+                continue
+            freq[rr] = freq.get(rr, 0) + 1
+        picks = [x[0] for x in sorted(freq.items(), key=lambda x: (-x[1], len(x[0]), x[0]))[:limit]]
+        return ' / '.join(picks)
+
+    group_stats = []
+    for g in groups:
+        models_mentioned = uniq_models(g)
+        dcnt = dir_counts(g)
+        group_stats.append({
+            'group': g,
+            'name': main_name(g),
+            'mentioned_models': models_mentioned,
+            'mentioned_n': len(models_mentioned),
+            'dir_counts': dcnt,
+            'avg_delta': avg_delta(g),
+            'reasons': reason_snippet(g),
+        })
+
+    inc = sorted(group_stats, key=lambda x: (-x['dir_counts']['增'], -x['mentioned_n'], x['name']))
+    dec = sorted(group_stats, key=lambda x: (-x['dir_counts']['减'], -x['mentioned_n'], x['name']))
+    mixed = [x for x in group_stats if x['dir_counts']['增'] and x['dir_counts']['减']]
+    mixed.sort(key=lambda x: (-(x['dir_counts']['增'] + x['dir_counts']['减']), -x['mentioned_n'], x['name']))
+
+    def pick_top(lst, *, key: str, n: int) -> List[Dict]:
+        out = []
+        for x in lst:
+            if x['dir_counts'].get(key, 0) <= 0:
+                continue
+            out.append(x)
+            if len(out) >= n:
+                break
+        return out
+
+    def fmt_reason(s: str) -> str:
+        t = (s or '').strip()
+        if not t:
+            return ''
+        t = t.replace('\n', ' ')
+        t = re.sub(r'\s+', ' ', t)
+        if len(t) > 40:
+            t = t[:40].rstrip()
+        return t
+
+    inc_top = pick_top(inc, key='增', n=3)
+    dec_top = pick_top(dec, key='减', n=3)
+    mixed_top = mixed[:2]
+
+    parts: List[str] = []
+    parts.append(f'综合当日{model_count}份报告的“定投增减要点”，可以概括为：')
+
+    if inc_top:
+        names = '、'.join(x['name'] for x in inc_top)
+        reasons = [fmt_reason(x['reasons']) for x in inc_top if fmt_reason(x['reasons'])]
+        if reasons:
+            parts.append(f'多份报告倾向把定投多放在{names}，常见理由包括：' + '；'.join(reasons) + '。')
+        else:
+            parts.append(f'多份报告倾向把定投多放在{names}。')
+
+    if dec_top:
+        names = '、'.join(x['name'] for x in dec_top)
+        reasons = [fmt_reason(x['reasons']) for x in dec_top if fmt_reason(x['reasons'])]
+        if reasons:
+            parts.append(f'同时，多份报告建议适当收缩{names}，常见理由包括：' + '；'.join(reasons) + '。')
+        else:
+            parts.append(f'同时，多份报告建议适当收缩{names}。')
+
+    if mixed_top:
+        seg = []
+        for x in mixed_top:
+            c = x['dir_counts']
+            name = x['name']
+            r = fmt_reason(x['reasons'])
+            if r:
+                seg.append(f'{name}分歧较大（{c["增"]}份建议加一点、{c["减"]}份建议减一点），原因多提到：{r}')
+            else:
+                seg.append(f'{name}分歧较大（{c["增"]}份建议加一点、{c["减"]}份建议减一点）')
+        parts.append('在分歧方面，' + '；'.join(seg) + '。')
+
+    paragraph = ''.join(parts).replace('\n', '').strip()
+    if len(paragraph) > max_chars:
+        paragraph = paragraph[:max_chars].rstrip()
+    return paragraph
 
 def select_best_candidate(cands: List[CellCandidate]) -> Optional[CellCandidate]:
     if not cands: return None
@@ -430,23 +870,147 @@ def render_table(headers: List[str], rows: List[List[str]]) -> str:
         lines.append('| ' + ' | '.join(map(esc, r)) + ' |')
     return '\n'.join(lines)
 
+def _run_git(args: List[str]) -> Tuple[int, str, str]:
+    p = subprocess.run(
+        ['git'] + args,
+        cwd=str(ROOT),
+        text=True,
+        capture_output=True,
+    )
+    return p.returncode, (p.stdout or '').strip(), (p.stderr or '').strip()
+
+def publish_to_github(paths: List[Path], message: str, *, dry_run: bool) -> bool:
+    code, out, err = _run_git(['rev-parse', '--is-inside-work-tree'])
+    if code != 0 or out.lower() != 'true':
+        print('GitHub 上传失败：当前目录不是 Git 仓库')
+        if err:
+            print(err)
+        return False
+
+    code, out, err = _run_git(['diff', '--cached', '--name-only'])
+    if code != 0:
+        print('GitHub 上传失败：无法读取暂存区状态')
+        if err:
+            print(err)
+        return False
+    if out.strip():
+        print('GitHub 上传已跳过：暂存区已有变更，请先处理暂存区后再上传')
+        return False
+
+    rels: List[str] = []
+    for p in paths:
+        try:
+            rels.append(str(p.relative_to(ROOT)))
+        except Exception:
+            rels.append(str(p))
+
+    if dry_run:
+        print('GitHub 上传（dry-run）：')
+        print('  git add -- ' + ' '.join(rels))
+        print(f'  git commit -m "{message}" -- ' + ' '.join(rels))
+        print('  git push')
+        return True
+
+    code, out, err = _run_git(['add', '--'] + rels)
+    if code != 0:
+        print('GitHub 上传失败：git add 失败')
+        if err:
+            print(err)
+        return False
+
+    code, out, err = _run_git(['diff', '--cached', '--name-only'])
+    if code != 0:
+        print('GitHub 上传失败：无法读取暂存区变更')
+        if err:
+            print(err)
+        return False
+    staged = [x.strip() for x in out.splitlines() if x.strip()]
+    if not staged:
+        print('GitHub 上传：无变更，跳过提交与推送')
+        return True
+
+    allow = set(rels)
+    if any(x not in allow for x in staged):
+        print('GitHub 上传已停止：暂存区包含非目标文件')
+        print('暂存区文件：' + ' / '.join(staged))
+        return False
+
+    code, out, err = _run_git(['commit', '-m', message, '--'] + rels)
+    if code != 0:
+        print('GitHub 上传失败：git commit 失败')
+        if err:
+            print(err)
+        return False
+
+    code, out, err = _run_git(['push'])
+    if code != 0:
+        print('GitHub 上传失败：git push 失败')
+        if err:
+            print(err)
+        return False
+
+    print('GitHub 上传：已提交并推送')
+    return True
+
 # --- Main Execution ---
 
-def main():
-    if not INPUT_DIR.exists():
-        print(f"Input dir {INPUT_DIR} does not exist.")
-        return
+def main(date_str: str, *, force: bool, validate_only: bool, publish: bool, publish_dry_run: bool) -> int:
+    input_dir = ROOT / '报告' / date_str
+    output_path = OUTPUT_DIR / f'{date_str}_最终投资总结.md'
+    file_re = re.compile(rf'^{re.escape(date_str)}_(.+)_投资建议\.md$')
+
+    if not input_dir.exists():
+        print(f"Input dir {input_dir} does not exist.")
+        return 1
 
     files = []
-    for p in INPUT_DIR.iterdir():
+    for p in input_dir.iterdir():
         if not p.is_file(): continue
-        m = FILE_RE.match(p.name)
+        m = file_re.match(p.name)
         if m:
             files.append((p, m.group(1)))
     
     if not files:
-        print(f"No files matching pattern in {INPUT_DIR}")
-        return
+        print(f"No files matching pattern in {input_dir}")
+        return 1
+
+    ok, issues, source_hint = validate_report_items_against_strategy(date_str, files)
+    fatal_issues = [it for it in issues if it.extra_items or it.missing_items]
+    warn_issues = [it for it in issues if (not it.extra_items and not it.missing_items and it.mapped_name_mismatches)]
+
+    if fatal_issues:
+        print('标的校验：发现与数据源不一致')
+        print(source_hint)
+        for it in fatal_issues:
+            print(f'- {it.file_name}（{it.raw_model}）')
+            if it.extra_items:
+                print('  - 报告存在但数据源未匹配：' + ' / '.join(it.extra_items))
+            if it.missing_items:
+                print('  - 数据源存在但报告缺失：' + ' / '.join(it.missing_items))
+            if it.mapped_name_mismatches:
+                pairs = [f'{a} -> {b}' for a, b in it.mapped_name_mismatches]
+                print('  - 名称不一致但已匹配：' + ' / '.join(pairs))
+
+        if validate_only:
+            return 2
+        if not force:
+            print('已停止生成。请修正报告/数据源后重试；如确认继续生成，添加 --force。')
+            return 2
+        print('已启用 --force，将继续生成每日最终报告。')
+    elif warn_issues:
+        print('标的校验：通过（存在名称不一致但已匹配）')
+        print(source_hint)
+        for it in warn_issues:
+            print(f'- {it.file_name}（{it.raw_model}）')
+            pairs = [f'{a} -> {b}' for a, b in it.mapped_name_mismatches]
+            print('  - 名称不一致但已匹配：' + ' / '.join(pairs))
+        if validate_only:
+            return 0
+    else:
+        if validate_only:
+            print('标的校验：通过')
+            print(source_hint)
+            return 0
 
     parsed_models = []
     for path, raw_model in files:
@@ -454,6 +1018,7 @@ def main():
         canon = canonicalize_model(raw_model)
         cat_order, cats = parse_categories(text, raw_model)
         item_order, items = parse_items(text, raw_model)
+        top_changes = parse_top_changes(text, raw_model, canon)
         themes, no_new = parse_themes(text, raw_model)
         
         parsed_models.append(ModelParsed(
@@ -461,6 +1026,7 @@ def main():
             canonical_model=canon,
             categories=cats,
             items=items,
+            top_changes=top_changes,
             themes=themes,
             explicitly_no_new=no_new,
             cat_order=cat_order,
@@ -474,7 +1040,6 @@ def main():
                  
     # Aggregate Data
     all_cats = set()
-    all_items = set()
     
     # Stability ordering maps
     cat_seen_order = {}
@@ -482,7 +1047,6 @@ def main():
     
     for m in parsed_models:
         for k in m.categories: all_cats.add(k)
-        for k in m.items: all_items.add(k)
         
         for k in m.cat_order:
             if k not in cat_seen_order: cat_seen_order[k] = len(cat_seen_order)
@@ -496,9 +1060,53 @@ def main():
         return (1, k)
     cat_list.sort(key=cat_sort_key)
 
-    # Sort Items (First seen order)
-    item_list = list(all_items)
-    item_list.sort(key=lambda k: (item_seen_order.get(k, 9999), k))
+    # Group Items (handle name variants across models, e.g. DeepSeek naming)
+    @dataclass
+    class ItemGroup:
+        names: List[str]
+        norms: List[str]
+        entries_by_col: Dict[str, List[ItemEntry]]
+        order_key: int
+
+    all_item_entries: List[ItemEntry] = []
+    for pm in parsed_models:
+        for name, cand in pm.items.items():
+            all_item_entries.append(ItemEntry(
+                name=name,
+                name_norm=normalize_item_name(name),
+                candidate=cand,
+                canonical_model=pm.canonical_model,
+            ))
+
+    item_groups: List[ItemGroup] = []
+    for ie in all_item_entries:
+        placed = False
+
+        for g in item_groups:
+            match = any(item_norm_similar(ie.name_norm, gn) for gn in g.norms)
+
+            if match:
+                g.names.append(ie.name)
+                g.norms.append(ie.name_norm)
+                if ie.canonical_model not in g.entries_by_col:
+                    g.entries_by_col[ie.canonical_model] = []
+                g.entries_by_col[ie.canonical_model].append(ie)
+                g.order_key = min(g.order_key, item_seen_order.get(ie.name, 999999))
+                placed = True
+                break
+
+        if not placed:
+            item_groups.append(ItemGroup(
+                names=[ie.name],
+                norms=[ie.name_norm],
+                entries_by_col={ie.canonical_model: [ie]},
+                order_key=item_seen_order.get(ie.name, 999999),
+            ))
+
+    def item_group_sort_key(g: ItemGroup):
+        return (g.order_key, sorted(set(g.names), key=lambda x: (len(x), x))[0])
+
+    item_groups.sort(key=item_group_sort_key)
 
     # Build Tables
     cat_rows = []
@@ -528,15 +1136,17 @@ def main():
     item_rows = []
     item_cons_rows = []
     
-    for item in item_list:
-        row = [item]
+    for g in item_groups:
+        freq = {}
+        for n in g.names:
+            freq[n] = freq.get(n, 0) + 1
+        main_name = sorted(freq.items(), key=lambda x: (-x[1], len(x[0]), x[0]))[0][0]
+
+        row = [main_name]
         cands_for_row = []
         for col in model_cols:
-            cands = []
-            for pm in parsed_models:
-                if pm.canonical_model == col and item in pm.items:
-                    cands.append(pm.items[item])
-            best = select_best_candidate(cands)
+            cands = [ie.candidate for ie in g.entries_by_col.get(col, [])]
+            best = select_best_candidate(cands) if cands else None
             cands_for_row.append(best)
             row.append(best.display if best else '—')
             
@@ -664,8 +1274,12 @@ def main():
 
     # Output Markdown
     md = []
-    md.append(f'# 投资总结（{DATE}）\n')
+    md.append(f'# 投资总结（{date_str}）\n')
     
+    md.append('## 0. 定投增减要点综述（1000字以内）')
+    md.append(summarize_top_changes_paragraph(parsed_models, max_chars=1000))
+    md.append('')
+
     md.append(f'## 1. 大板块比例调整建议（按大类横向对比）')
     md.append(render_table(['大板块'] + model_cols + ['一致性', '分歧摘要'], cat_rows))
     md.append('\n### 一致建议')
@@ -680,8 +1294,30 @@ def main():
     md.append(render_table(['主题/方向'] + model_cols + ['异同'], theme_rows))
     
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text('\n'.join(md), encoding='utf-8')
-    print(f"Successfully generated: {OUTPUT_PATH}")
+    output_path.write_text('\n'.join(md), encoding='utf-8')
+    print(f"Successfully generated: {output_path}")
+    if publish:
+        ok = publish_to_github(
+            [output_path],
+            f'每日总结 {date_str}',
+            dry_run=publish_dry_run,
+        )
+        if not ok:
+            return 3
+    return 0
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--date', dest='date', default=DEFAULT_DATE)
+    parser.add_argument('--force', action='store_true')
+    parser.add_argument('--validate-only', action='store_true')
+    parser.add_argument('--publish', action='store_true')
+    parser.add_argument('--publish-dry-run', action='store_true')
+    args = parser.parse_args()
+    sys.exit(main(
+        args.date,
+        force=args.force,
+        validate_only=args.validate_only,
+        publish=args.publish,
+        publish_dry_run=args.publish_dry_run,
+    ))

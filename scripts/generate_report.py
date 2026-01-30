@@ -2,6 +2,7 @@ import json
 import sys
 import datetime
 from pathlib import Path
+import argparse
 
 # Configuration
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -15,237 +16,348 @@ def load_json(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def generate_report_content(data, model_name, today_str):
+def _bp_to_pct_str(bp: int):
+    return f"{bp / 100:.2f}"
+
+def _action_from_diff_bp(diff_bp: int):
+    if diff_bp >= 15:
+        return "增持"
+    if diff_bp <= -15:
+        return "减持"
+    return "不变"
+
+def _clamp(x: float, lo: float, hi: float):
+    return max(lo, min(hi, x))
+
+def _get_fred_value(market_data, series_id: str):
+    fred = (market_data or {}).get("fred", {}) or {}
+    v = (fred.get(series_id) or {}).get("value")
+    return float(v) if v is not None else None
+
+def _get_fred_obs(market_data, series_id: str):
+    fred = (market_data or {}).get("fred", {}) or {}
+    x = fred.get(series_id) or {}
+    if x.get("value") is None:
+        return None
+    return {
+        "id": series_id,
+        "value": x.get("value"),
+        "date": x.get("date"),
+        "url": x.get("url") or f"https://fred.stlouisfed.org/series/{series_id}",
+    }
+
+def _normalize_ratio_map(ratios: dict):
+    s = sum(float(v) for v in ratios.values()) if ratios else 0.0
+    if s <= 0:
+        n = len(ratios) or 1
+        return {k: 1.0 / n for k in ratios.keys()}
+    return {k: float(v) / s for k, v in ratios.items()}
+
+def _propose_category_ratios(cat_ratio_current: dict, market_data):
+    proposed = dict(cat_ratio_current)
+    real_yield = _get_fred_value(market_data, "DFII10")
+    curve = _get_fred_value(market_data, "T10Y2Y")
+    usd = _get_fred_value(market_data, "DTWEXBGS")
+    gvz = _get_fred_value(market_data, "GVZCLS")
+    breakeven = _get_fred_value(market_data, "T10YIE")
+
+    risk_off = 0
+    if curve is not None and curve < 0:
+        risk_off += 1
+    if real_yield is not None and real_yield >= 1.5:
+        risk_off += 1
+    if gvz is not None and gvz >= 20:
+        risk_off += 1
+    if usd is not None and usd >= 120:
+        risk_off += 1
+
+    if "债券" in proposed:
+        proposed["债券"] = _clamp(
+            proposed["债券"] + (0.03 if risk_off >= 2 else 0.01 if risk_off == 1 else 0.0),
+            0.05,
+            0.7,
+        )
+
+    if "期货" in proposed:
+        gold_bias = 0.0
+        if breakeven is not None and breakeven >= 2.5 and (real_yield is None or real_yield < 1.5):
+            gold_bias += 0.01
+        if real_yield is not None and real_yield >= 2.0 and (usd is None or usd >= 120):
+            gold_bias -= 0.01
+        proposed["期货"] = _clamp(proposed["期货"] + gold_bias, 0.05, 0.5)
+
+    equity_delta = 0.0
+    if "债券" in proposed and "债券" in cat_ratio_current:
+        equity_delta -= proposed["债券"] - cat_ratio_current["债券"]
+    if "期货" in proposed and "期货" in cat_ratio_current:
+        equity_delta -= proposed["期货"] - cat_ratio_current["期货"]
+
+    equities = [c for c in ["中股", "美股"] if c in proposed]
+    if equities and abs(equity_delta) > 1e-9:
+        each = equity_delta / len(equities)
+        for c in equities:
+            proposed[c] = _clamp(proposed[c] + each, 0.05, 0.7)
+
+    for k in list(proposed.keys()):
+        proposed[k] = max(0.0, float(proposed[k]))
+    proposed = _normalize_ratio_map(proposed)
+
+    return proposed, {
+        "real_yield": real_yield,
+        "curve": curve,
+        "usd": usd,
+        "gvz": gvz,
+        "breakeven": breakeven,
+        "risk_off": risk_off,
+    }
+
+def _build_category_plan(data, market_data):
     allocation_summary = data.get("allocation_summary", [])
     investment_plan = data.get("investment_plan", [])
-    
-    # 0. Input Echo
-    categories_echo = " / ".join([f"{item['category']} {int(item['ratio']*100)}%" for item in allocation_summary if item['ratio']])
-    
+
+    cat_order = [x.get("category") for x in allocation_summary if x.get("category")]
+    cat_ratio_current = {x.get("category"): float(x.get("ratio") or 0) for x in allocation_summary if x.get("category")}
+    cat_ratio_current = _normalize_ratio_map(cat_ratio_current)
+    cat_ratio_proposed, signals = _propose_category_ratios(cat_ratio_current, market_data)
+
+    items_by_cat = {}
+    for it in investment_plan:
+        c = it.get("category")
+        if not c:
+            continue
+        items_by_cat.setdefault(c, []).append(it)
+
+    def propose_internal(c, items):
+        base = [float(x.get("ratio_in_category") or 0) for x in items]
+        if not base or sum(base) <= 0:
+            n = len(items) or 1
+            return [1.0 / n for _ in range(n)]
+
+        if c == "中股":
+            if signals.get("risk_off", 0) >= 1:
+                delta_by_sub = {"中证": 0.04, "红利低波": 0.03, "芯片": -0.04, "消费电子": -0.03}
+            else:
+                delta_by_sub = {"中证": -0.02, "红利低波": -0.02, "芯片": 0.03, "消费电子": 0.01}
+            raw = []
+            for it in items:
+                sub = (it.get("sub_category") or "").strip()
+                raw.append(max((it.get("ratio_in_category") or 0) + delta_by_sub.get(sub, 0.0), 0.0))
+            s = sum(raw)
+            return [x / s for x in raw] if s > 0 else base
+
+        if c == "期货":
+            real_yield = signals.get("real_yield")
+            if real_yield is not None and real_yield >= 1.5:
+                delta_by_sub = {"黄金": -0.03, "白银": -0.02, "有色": 0.05}
+            else:
+                delta_by_sub = {"黄金": 0.03, "白银": 0.01, "有色": -0.04}
+            raw = []
+            for it in items:
+                sub = (it.get("sub_category") or "").strip()
+                raw.append(max((it.get("ratio_in_category") or 0) + delta_by_sub.get(sub, 0.0), 0.0))
+            s = sum(raw)
+            return [x / s for x in raw] if s > 0 else base
+
+        if c == "美股":
+            healthcare_idx = [i for i, it in enumerate(items) if "医疗" in (it.get("sub_category") or "")]
+            if healthcare_idx:
+                h_i = healthcare_idx[0]
+                weights = [0.0 for _ in items]
+                weights[h_i] = 0.5 if signals.get("risk_off", 0) >= 1 else 0.4
+                remaining = 1.0 - weights[h_i]
+                others = [i for i in range(len(items)) if i != h_i]
+                each = remaining / len(others) if others else 0.0
+                for i in others:
+                    weights[i] = each
+                return weights
+            return base
+
+        return base
+
+    item_rows = []
+    for c in cat_order:
+        items = items_by_cat.get(c, [])
+        if not items:
+            continue
+        proposed_internal = propose_internal(c, items)
+        for it, p_int in zip(items, proposed_internal):
+            curr = cat_ratio_current.get(c, 0.0) * float(it.get("ratio_in_category") or 0.0)
+            prop = cat_ratio_proposed.get(c, 0.0) * float(p_int or 0.0)
+            item_rows.append(
+                {
+                    "category": c,
+                    "sub_category": (it.get("sub_category") or "").strip(),
+                    "fund_name": (it.get("fund_name") or "").strip(),
+                    "day_of_week": (it.get("day_of_week") or "").strip(),
+                    "curr_bp": int(round(curr * 10000)),
+                    "prop_bp": int(round(prop * 10000)),
+                }
+            )
+
+    total_prop = sum(x["prop_bp"] for x in item_rows)
+    if item_rows and total_prop != 10000:
+        item_rows[-1]["prop_bp"] += 10000 - total_prop
+
+    total_curr = sum(x["curr_bp"] for x in item_rows)
+    if item_rows and total_curr != 10000:
+        item_rows[-1]["curr_bp"] += 10000 - total_curr
+
+    cat_curr_bp = {c: 0 for c in cat_order}
+    cat_prop_bp = {c: 0 for c in cat_order}
+    for r in item_rows:
+        cat_curr_bp[r["category"]] = cat_curr_bp.get(r["category"], 0) + r["curr_bp"]
+        cat_prop_bp[r["category"]] = cat_prop_bp.get(r["category"], 0) + r["prop_bp"]
+
+    return cat_order, cat_curr_bp, cat_prop_bp, item_rows, signals
+
+def generate_report_content(strategy, market_data, model_name, today_str):
+    review_cycle = "每月"
+    risk_pref = "稳健"
+
+    cat_order, cat_curr_bp, cat_prop_bp, item_rows, signals = _build_category_plan(strategy, market_data)
+
+    alloc_echo = " / ".join([f"{c} {_bp_to_pct_str(cat_prop_bp.get(c, 0))}%" for c in cat_order])
+
+    fred = (market_data or {}).get("fred", {})
+    fred_parts = []
+    for sid in ["DGS10", "DFII10", "T10Y2Y", "DTWEXBGS", "T10YIE", "GVZCLS"]:
+        x = fred.get(sid) or {}
+        if x.get("value") is None:
+            continue
+        fred_parts.append(f"{sid}={x['value']}({x.get('date')})")
+
     md = []
-    md.append(f"### 0. 输入回显 (Input Echo)")
+    md.append("### 0. 输入回显 (Input Echo)")
     md.append(f"* 日期：{today_str}")
-    md.append(f"* 定投检视周期：每月")
-    md.append(f"* 风险偏好：稳健")
-    md.append(f"* 定投大类目标：{categories_echo}")
-    md.append(f"* 关键假设：基于 2026 年 1 月最新宏观数据（美联储降息预期、中国财政发力、AI/黄金牛市）")
+    md.append(f"* 模型名：{model_name}")
+    md.append(f"* 定投检视周期：{review_cycle}")
+    md.append(f"* 风险偏好：{risk_pref}")
+    md.append(f"* 定投大类目标：{alloc_echo}（合计 100%）")
+    md.append(f"* 关键假设：以本地 market_data.json 与策略表为准；未引入新增大类")
     md.append(f"* 产物路径：")
     md.append(f"  - 投资策略.json：`报告/{today_str}/投资策略.json`")
     md.append(f"  - 投资简报_{model_name}.md：`报告/{today_str}/简报/投资简报_{model_name}.md`")
+    md.append(f"  - 投资建议报告：`报告/{today_str}/{today_str}_{model_name}_投资建议.md`")
     md.append("")
 
-    # 1. Top SIP Changes
-    md.append(f"### 1. 定投增减要点（最多 5 条）(Top SIP Changes)")
-    # Logic: 
-    # Gold/Silver -> Increase (Bull run)
-    # China Tech (Chips/AI/Electronics) -> Increase (Policy + DeepSeek catalyst)
-    # Bonds -> Maintain/Slight Decrease (if risk on) -> Actually keep for safety.
-    # US Stocks -> Maintain.
-    
-    md.append(f"* 黄金/白银：增持 10%→12% — 央行购金持续，2026 目标价 $5000，趋势确立。")
-    md.append(f"* 中股-芯片/电子：增持 15%→18% — 国产替代加速，AI 芯片 IPO 热潮，景气度上行。")
-    md.append(f"* 中股-红利低波：增持 10%→12% — 降息周期下高股息资产具备防御与配置价值。")
-    md.append(f"* 中股-光伏：维持 10%→10% — 行业仍处磨底期，静待产能出清信号。")
-    md.append(f"* 债券：维持 25%→25% — 利率下行空间有限，作为组合压舱石保持稳定。")
+    md.append("### 1. 定投增减要点（最多 5 条）(Top SIP Changes)")
+    deltas = []
+    for r in item_rows:
+        diff = r["prop_bp"] - r["curr_bp"]
+        if diff == 0:
+            continue
+        deltas.append((abs(diff), diff, r))
+    deltas.sort(key=lambda x: x[0], reverse=True)
+    for _, diff, r in deltas[:5]:
+        action = "增持" if diff > 0 else "减持"
+        curr = _bp_to_pct_str(r["curr_bp"])
+        prop = _bp_to_pct_str(r["prop_bp"])
+        reason = "防御+估值低" if "医疗" in r["sub_category"] else "估值偏高" if r["sub_category"] in {"芯片"} else "震荡加仓" if r["fund_name"].endswith("沪深300ETF联接C") else "现金流稳" if r["sub_category"] == "红利低波" else "波动加大" if r["sub_category"] == "消费电子" else "跟随调整"
+        md.append(f"* {r['fund_name']}：{action} {curr}%→{prop}% — {reason}")
+    if not deltas:
+        md.append("* 全部标的：不变 — 本周期维持既定配置")
     md.append("")
 
-    # 2. Category Allocation Changes
-    md.append(f"### 2. 大板块比例调整建议（必须）(Category Allocation Changes)")
-    md.append(f"| 大板块 | 当前% | 建议% | 变动 | 建议（增配/减配/不变） | 简短理由 |")
-    md.append(f"|---|---:|---:|---:|---|---|")
-    
-    # Current ratios
-    current_ratios = {item['category']: item['ratio'] for item in allocation_summary}
-    
-    # Proposed ratios (Adjusted based on view)
-    # Bond: 0.25 -> 0.25
-    # China: 0.35 -> 0.37 (+0.02)
-    # Futures (Gold/Silver/Commodity): 0.20 -> 0.22 (+0.02)
-    # US: 0.20 -> 0.16 (-0.04) (Take profit/Valuation concern)
-    
-    proposed_ratios = {
-        "债券": 0.25,
-        "中股": 0.37,
-        "期货": 0.22,
-        "美股": 0.16
-    }
-    
-    for cat in ["债券", "中股", "期货", "美股"]:
-        curr = current_ratios.get(cat, 0)
-        prop = proposed_ratios.get(cat, 0)
-        diff = prop - curr
-        diff_str = f"{diff:+.0%}" if diff != 0 else "0%"
-        action = "增配" if diff > 0 else "减配" if diff < 0 else "不变"
-        reason = ""
-        if cat == "债券": reason = "稳健底仓，对冲风险"
-        elif cat == "中股": reason = "政策发力，科技/红利双主线"
-        elif cat == "期货": reason = "贵金属牛市持续，抗通胀"
-        elif cat == "美股": reason = "估值高位，适度止盈"
-        
-        md.append(f"| {cat} | {curr:.0%} | {prop:.0%} | {diff_str} | {action} | {reason} |")
+    md.append("### 2. 大板块比例调整建议（必须）(Category Allocation Changes)")
+    md.append("| 大板块 | 当前% | 建议% | 变动 | 建议（增配/减配/不变） | 简短理由 |")
+    md.append("|---|---:|---:|---:|---|---|")
+    for c in cat_order:
+        curr_bp = cat_curr_bp.get(c, 0)
+        prop_bp = cat_prop_bp.get(c, 0)
+        diff_bp = prop_bp - curr_bp
+        action = "增配" if diff_bp > 0 else "减配" if diff_bp < 0 else "不变"
+        if c == "债券":
+            reason = "曲线倒挂防御" if signals.get("curve") is not None and signals["curve"] < 0 else "收益率偏高"
+        elif c == "中股":
+            reason = "估值博弈"
+        elif c == "期货":
+            reason = "实际利率影响"
+        elif c == "美股":
+            reason = "偏防御配置" if signals.get("risk_off", 0) >= 1 else "维持结构"
+        else:
+            reason = "跟随策略"
+        md.append(f"| {c} | {_bp_to_pct_str(curr_bp)} | {_bp_to_pct_str(prop_bp)} | {diff_bp/100:+.2f} | {action} | {reason} |")
     md.append("")
 
-    # 3. Per-Item Actions
-    md.append(f"### 3. 定投计划逐项建议（全量，逐项表格）(Per-Item Actions)")
-    md.append(f"| 大板块 | 小板块 | 标的 | 定投日 | 当前% | 建议% | 变动 | 建议（增持/减持/不变） | 简短理由 |")
-    md.append(f"|---|---|---|---|---:|---:|---:|---|---|")
-    
-    # Process each investment plan item
-    # Need to distribute category proposed ratio to items
-    # Group items by category
-    items_by_cat = {}
-    for item in investment_plan:
-        cat = item['category']
-        if cat not in items_by_cat: items_by_cat[cat] = []
-        items_by_cat[cat].append(item)
-        
-    for cat in ["债券", "中股", "期货", "美股"]: # Fixed order
-        if cat not in items_by_cat: continue
-        
-        cat_items = items_by_cat[cat]
-        cat_prop_ratio = proposed_ratios.get(cat, 0)
-        cat_curr_ratio = current_ratios.get(cat, 0)
-        
-        # Adjust internal weights
-        # Logic:
-        # China: Increase Chips/Electronics/Dividend, Decrease/Maintain others
-        # Futures: Increase Gold/Silver
-        
-        # Calculate new internal ratios (must sum to 1.0)
-        # Simple heuristic:
-        # 1. Identify "Boost" items, "Cut" items, "Hold" items
-        # 2. Redistribute
-        
-        # Heuristic implementation:
-        # Just map specific sub-categories to weight multipliers
-        weight_mult = {
-            "芯片": 1.2, "消费电子": 1.1, "红利低波": 1.1, "黄金": 1.1, "白银": 1.1,
-            "光伏": 0.9, "商业航天": 1.0, "创新药": 1.0, "汽车": 1.0, "国债": 1.0,
-            "有色": 0.9, "中证": 1.0
-        }
-        
-        # First pass: calculate raw new weights
-        raw_new_weights = []
-        total_raw = 0
-        for item in cat_items:
-            sub = item['sub_category']
-            current_internal = item['ratio_in_category']
-            mult = weight_mult.get(sub, 1.0)
-            raw = current_internal * mult
-            raw_new_weights.append(raw)
-            total_raw += raw
-            
-        # Second pass: normalize
-        normalized_internal_ratios = [w / total_raw for w in raw_new_weights]
-        
-        for idx, item in enumerate(cat_items):
-            sub = item['sub_category']
-            name = item['fund_name']
-            day = item['day_of_week']
-            
-            curr_global = cat_curr_ratio * item['ratio_in_category']
-            new_internal = normalized_internal_ratios[idx]
-            new_global = cat_prop_ratio * new_internal
-            
-            diff = new_global - curr_global
-            diff_str = f"{diff:+.2%}"
-            
-            action = "增持" if diff > 0.001 else "减持" if diff < -0.001 else "不变"
-            
-            reason = "跟随大类调整"
-            if sub in ["芯片", "消费电子"]: reason = "AI 产业趋势向上"
-            elif sub == "黄金": reason = "避险+央行购金"
-            elif sub == "红利低波": reason = "防御属性优"
-            elif sub == "光伏": reason = "供需仍需平衡"
-            
-            md.append(f"| {cat} | {sub} | {name} | {day} | {curr_global:.2%} | {new_global:.2%} | {diff_str} | {action} | {reason} |")
-            
+    md.append("### 3. 定投计划逐项建议（全量，逐项表格）(Per-Item Actions)")
+    md.append("| 大板块 | 小板块 | 标的 | 定投日 | 当前% | 建议% | 变动 | 建议（增持/减持/不变） | 简短理由 |")
+    md.append("|---|---|---|---|---:|---:|---:|---|---|")
+    for r in item_rows:
+        diff_bp = r["prop_bp"] - r["curr_bp"]
+        action = _action_from_diff_bp(diff_bp)
+        reason = "稳健压舱" if r["category"] == "债券" else "震荡加仓" if r["sub_category"] == "中证" else "估值偏高" if r["sub_category"] == "芯片" else "波动加大" if r["sub_category"] == "消费电子" else "现金流稳" if r["sub_category"] == "红利低波" else "高波动控仓" if r["category"] == "期货" else "偏防御" if r["sub_category"] == "医疗保健" else "跟随调整"
+        md.append(
+            f"| {r['category']} | {r['sub_category']} | {r['fund_name']} | {r['day_of_week']} | {_bp_to_pct_str(r['curr_bp'])} | {_bp_to_pct_str(r['prop_bp'])} | {diff_bp/100:+.2f} | {action} | {reason} |"
+        )
     md.append("")
 
-    # 4. New SIP Directions
-    md.append(f"### 4. 新的定投方向建议（如有）(New SIP Directions)")
-    md.append(f"| 行业/主题 | 建议定投比例 | 口径 | 简短理由 |")
-    md.append(f"|---|---:|---|---|")
-    md.append(f"| 机器人 | 5% | 占新增资金 | 人形机器人 2026 量产元年，具身智能爆发。 |")
-    md.append(f"| 东南亚科技 | 5% | 占新增资金 | 产业链转移受益，互联网经济高增速。 |")
+    md.append("### 4. 新的定投方向建议（如有）(New SIP Directions)")
+    md.append("| 行业/主题 | 建议定投比例 | 口径 | 简短理由 |")
+    md.append("|---|---:|---|---|")
+    md.append("| 无 | 0% | 占全组合 | 优先执行结构调整 |")
     md.append("")
 
-    # 5. Next Actions
-    md.append(f"### 5. 执行指令（下一周期）(Next Actions)")
-    md.append(f"* 定投：维持（中股/期货加大扣款，美股暂停或减半）")
-    md.append(f"* 资金池：若沪深300回撤超 3%，单次加仓 2000 元。")
-    md.append(f"* 风险控制：单一权益类基金亏损超 15% 暂停定投进行检视；黄金创新高后不追单笔大额。")
+    md.append("### 5. 执行指令（下一周期）(Next Actions)")
+    md.append("* 定投：维持（板块不变，板块内按“建议%”微调）")
+    md.append("* 资金池：沪深300单周回撤≥3%时，优先加仓“广发沪深300ETF联接C”")
+    md.append("* 风险控制：1) 期货单日大涨大跌不追涨 2) 美股科技连跌分批 3) 组合回撤>10%降风险")
     md.append("")
 
-    # 6. Holdings Notes
-    md.append(f"### 6. 现有持仓建议（最多 5 点）(Holdings Notes)")
-    # non_investment_holdings items?
-    # Let's assume some based on JSON or generic advice
-    non_inv = data.get("non_investment_holdings", [])
-    if non_inv:
-        for item in non_inv[:5]:
-            name = item['fund_name']
-            md.append(f"* {name}：持有 — 非定投底仓，长期持有不动。")
+    md.append("### 6. 现有持仓建议（最多 5 点）(Holdings Notes)")
+    non_inv = strategy.get("non_investment_holdings", []) or []
+    non_names = [str(x.get("fund_name") or "").strip() for x in non_inv if str(x.get("fund_name") or "").strip()]
+    if non_names:
+        joined = " / ".join(non_names)
+        md.append(f"* {joined}：持有 — 非定投底仓检视")
     else:
-        md.append(f"* 存量持仓：建议对 2 年以上亏损超 20% 的非主线基金进行止损置换。")
+        md.append("* 非定投持仓：无 — ")
+    md.append("* 港股创新药：分批观测 — 波动较大")
+    md.append("* 货币基金：保持 — 应急现金")
+    md.append("* 北证：控仓 — 波动偏高")
+    md.append("* 芯片存量：不加仓 — 估值偏高")
     md.append("")
 
-    # 7. Sources
-    md.append(f"### 7. 数据来源 (Sources)")
-    md.append(f"1. J.P. Morgan Global Research (2026-01-06): Gold Price Outlook 2026")
-    md.append(f"2. World Gold Council (2026-01-06): Central Bank Buying Momentum")
-    md.append(f"3. Deloitte China (2025-12): Outlook of macro economy 2026")
-    md.append(f"4. Yahoo Finance (2026-01): Chinese tech stocks & AI chip IPO surge")
-    md.append(f"5. Trading Economics (2026-01): US/China Economic Calendar")
-    
+    md.append("### 7. 数据来源 (Sources)")
+    for sid in ["DFII10", "T10Y2Y", "CPIAUCSL", "UNRATE", "NAPM", "DTWEXBGS"]:
+        obs = _get_fred_obs(market_data, sid)
+        if not obs:
+            continue
+        md.append(f"* {obs['date']} FRED {obs['id']}={obs['value']}：{obs['url']}")
+    pmi_source = (market_data or {}).get("china_pmi_source")
+    if pmi_source:
+        md.append(f"* {pmi_source}")
+    md.append(f"* {today_str} Eastmoney 基金估值接口：market_data.json funds[*].url")
+
     return "\n".join(md)
 
-def update_progress_final(model_name, today_str):
-    progress_file = REPORTS_DIR / today_str / "进度" / f"进度_{model_name}.md"
-    if not progress_file.exists():
-        return
-
-    with open(progress_file, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    content = content.replace("当前阶段：3", "当前阶段：6")
-    content = content.replace("完成度：50%", "完成度：100%")
-    content = content.replace("- [ ] 4) 联网数据搜集完成", "- [x] 4) 联网数据搜集完成")
-    content = content.replace("- [ ] 5) 输出并保存投资建议报告", "- [x] 5) 输出并保存投资建议报告")
-    content = content.replace("- [ ] 6) 校验文件命名、标的命名并清理无关文件（最后检查）", "- [x] 6) 校验文件命名、标的命名并清理无关文件（最后检查）")
-    
-    report_name = f"{today_str}_{model_name}_投资建议.md"
-    content = content.replace("投资建议报告：{路径或未生成}", f"投资建议报告：报告/{today_str}/{report_name}")
-    content = content.replace("命名校验：{通过/不通过 + 处理说明}", "命名校验：通过")
-    content = content.replace("基金标的覆盖校验：{通过/不通过 + 处理说明}", "基金标的覆盖校验：通过")
-    content = content.replace("标的名称一致性校验：{通过/不通过 + 处理说明}", "标的名称一致性校验：通过")
-    
-    with open(progress_file, 'w', encoding='utf-8') as f:
-        f.write(content)
-    print(f"Final progress update: {progress_file}")
-
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python generate_report.py <model_name>")
-        sys.exit(1)
-    
-    model_name = sys.argv[1]
-    today_str = get_today_str()
-    
+    p = argparse.ArgumentParser()
+    p.add_argument("--model", required=True)
+    p.add_argument("--date", default=get_today_str())
+    p.add_argument("--market", default=None)
+    args = p.parse_args()
+
+    model_name = args.model
+    today_str = args.date
+
     json_path = REPORTS_DIR / today_str / "投资策略.json"
-    data = load_json(json_path)
-    
-    report_content = generate_report_content(data, model_name, today_str)
-    
+    strategy = load_json(json_path)
+
+    market_data = None
+    if args.market:
+        market_path = Path(args.market)
+        if market_path.exists():
+            market_data = load_json(market_path)
+
+    report_content = generate_report_content(strategy, market_data, model_name, today_str)
+
     report_name = f"{today_str}_{model_name}_投资建议.md"
     output_path = REPORTS_DIR / today_str / report_name
-    
-    with open(output_path, 'w', encoding='utf-8') as f:
+
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(report_content)
-        
+
     print(f"Generated report: {output_path}")
-    
-    update_progress_final(model_name, today_str)
 
 if __name__ == "__main__":
     main()

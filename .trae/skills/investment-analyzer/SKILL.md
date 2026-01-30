@@ -38,6 +38,7 @@ description: "触发语：每日分析 / 开始单AI分析。执行基金+黄金
 - 如不存在，从 `Data/投资策略.xlsx` 转换生成
 - 优先用命令生成（会同时生成/复用简报与进度文件）：
   - `python scripts/run_workflow_part1.py --model "{模型名}" --date "{YYYY-MM-DD}" --fetch`
+  - `--fetch` 必须启用：即使 `报告/{YYYY-MM-DD}/market_data.json` 已存在，也要联网重新拉取并覆盖更新
 
 ### 步骤3：生成投资简报
 - 读取投资策略.json
@@ -51,6 +52,7 @@ description: "触发语：每日分析 / 开始单AI分析。执行基金+黄金
 ### 步骤5：最终校验与清理
 - 校验文件命名
 - 校验基金标的覆盖
+- 校验联网数据时间为本次日期（`market_data.json.fetched_at == YYYY-MM-DD`）
 - 清理临时文件
 - 优先用命令做命名+覆盖校验，并把结果写入校验报告：
   - `python scripts/run_workflow_part1.py --model "{模型名}" --date "{YYYY-MM-DD}" --validate`

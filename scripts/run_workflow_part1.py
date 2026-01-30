@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 import re
 import argparse
+import subprocess
 
 # --- Command Line Arguments ---
 parser = argparse.ArgumentParser()
@@ -62,6 +63,7 @@ def update_progress(stage, completion, details_checked=None, product_status=None
   - 命名校验：{product_status.get('name_check', '待校验') if product_status else '待校验'}
   - 基金标的覆盖校验：{product_status.get('fund_check', '待校验') if product_status else '待校验'}
   - 标的名称一致性校验：{product_status.get('consistency_check', '待校验') if product_status else '待校验'}
+  - 联网数据时间校验：{product_status.get('market_time_check', '待校验') if product_status else '待校验'}
   - 清理记录：{product_status.get('cleanup', '无') if product_status else '无'}
 """
     with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
@@ -83,11 +85,39 @@ def excel_to_json():
     # Helper to find row index containing a string
     def find_row(s, start=0):
         for idx, row in df.iloc[start:].iterrows():
-            # Check first few columns for the keyword
-            for val in row[:5]: 
+            for val in row.values:
                 if isinstance(val, str) and s in val:
                     return idx
         return None
+
+    def row_contains_any(row, keywords):
+        for v in row.values:
+            if isinstance(v, str):
+                for k in keywords:
+                    if k in v:
+                        return True
+        return False
+
+    def to_float(val):
+        if pd.isna(val):
+            return None
+        if isinstance(val, (int, float)):
+            try:
+                return float(val)
+            except Exception:
+                return None
+        s = str(val).strip()
+        if not s:
+            return None
+        if s.endswith("%"):
+            try:
+                return float(s[:-1].strip()) / 100.0
+            except Exception:
+                return None
+        try:
+            return float(s)
+        except Exception:
+            return None
 
     # Parse allocation_summary
     start_alloc = find_row("定投大板块比例")
@@ -113,8 +143,7 @@ def excel_to_json():
     current_row = header_row_idx + 1
     while current_row < len(df):
         row = df.iloc[current_row]
-        first_cell = str(row[0]) if pd.notna(row[0]) else ""
-        if "定投计划" in first_cell or "非定投" in first_cell:
+        if row_contains_any(row, ["定投计划", "非定投持仓", "非定投"]):
             break
         
         cat = row[col_cat]
@@ -122,13 +151,16 @@ def excel_to_json():
             current_row += 1
             continue
             
-        ratio = row[col_ratio]
-        weekly = row[col_weekly]
+        ratio = to_float(row[col_ratio])
+        weekly = to_float(row[col_weekly])
+        if ratio is None:
+            current_row += 1
+            continue
         
         allocation_summary.append({
             "category": str(cat).strip(),
-            "ratio": float(ratio) if pd.notna(ratio) else 0.0,
-            "weekly_amount_target": float(weekly) if pd.notna(weekly) else None
+            "ratio": ratio,
+            "weekly_amount_target": weekly
         })
         current_row += 1
 
@@ -165,13 +197,17 @@ def excel_to_json():
     current_row = header_row_idx + 1
     while current_row < len(df):
         row = df.iloc[current_row]
-        first_cell = str(row[0]) if pd.notna(row[0]) else ""
-        if "非定投" in first_cell:
+        if row_contains_any(row, ["非定投持仓", "非定投"]):
             break
             
         # Skip if name is empty
         name = row[col_name] if col_name is not None else None
         if pd.isna(name) or str(name).strip() == "":
+            current_row += 1
+            continue
+
+        ratio_in_category = to_float(row[col_ratio]) if col_ratio is not None else None
+        if ratio_in_category is None:
             current_row += 1
             continue
             
@@ -189,15 +225,15 @@ def excel_to_json():
         investment_plan.append({
             "category": str(row[col_cat]).strip() if col_cat is not None and pd.notna(row[col_cat]) else None,
             "sub_category": str(row[col_sub]).strip() if col_sub is not None and pd.notna(row[col_sub]) else None,
-            "ratio_in_category": float(row[col_ratio]) if col_ratio is not None and pd.notna(row[col_ratio]) else 0.0,
+            "ratio_in_category": ratio_in_category,
             "fund_code": fund_code,
             "fund_name": str(name).strip(),
-            "weekly_amount": float(row[col_weekly]) if col_weekly is not None and pd.notna(row[col_weekly]) else None,
+            "weekly_amount": to_float(row[col_weekly]) if col_weekly is not None else None,
             "day_of_week": str(row[col_day]).strip() if col_day is not None and pd.notna(row[col_day]) else None,
             "long_term_assessment": str(row[col_long]).strip() if col_long is not None and pd.notna(row[col_long]) else None,
             "mid_term_assessment": str(row[col_mid]).strip() if col_mid is not None and pd.notna(row[col_mid]) else None,
             "short_term_assessment": str(row[col_short]).strip() if col_short is not None and pd.notna(row[col_short]) else None,
-            "current_holding": float(row[col_holding]) if col_holding is not None and pd.notna(row[col_holding]) else 0.0
+            "current_holding": to_float(row[col_holding]) if col_holding is not None else 0.0
         })
         current_row += 1
 
@@ -233,7 +269,7 @@ def excel_to_json():
                 "category": str(row[col_cat]).strip() if col_cat is not None and pd.notna(row[col_cat]) else None,
                 "sub_category": str(row[col_sub]).strip() if col_sub is not None and pd.notna(row[col_sub]) else None,
                 "fund_name": str(name).strip(),
-                "current_holding": float(row[col_holding]) if col_holding is not None and pd.notna(row[col_holding]) else 0.0
+                "current_holding": to_float(row[col_holding]) if col_holding is not None else 0.0
             })
             current_row += 1
 
@@ -476,8 +512,97 @@ def json_to_brief():
     print(f"Generated: {BRIEF_FILE}")
     return True
 
+def validate_outputs():
+    report_file = REPORT_DIR / f"{TODAY}_{MODEL_NAME}_投资建议.md"
+    market_file = REPORT_DIR / "market_data.json"
+    missing_files = []
+    for p in [REPORT_DIR, PROGRESS_DIR, BRIEF_DIR, JSON_FILE, BRIEF_FILE, PROGRESS_FILE, report_file]:
+        if not p.exists():
+            missing_files.append(str(p.relative_to(ROOT_DIR)) if p.exists() else str(p))
+
+    name_ok = not missing_files
+
+    fund_missing = []
+    consistency_ok = True
+    if report_file.exists() and JSON_FILE.exists():
+        report_text = report_file.read_text(encoding="utf-8", errors="replace")
+        try:
+            strategy = json.loads(JSON_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            strategy = {}
+        fund_names = []
+        for x in strategy.get("investment_plan", []) or []:
+            n = (x.get("fund_name") or "").strip()
+            if n:
+                fund_names.append(n)
+        for x in strategy.get("non_investment_holdings", []) or []:
+            n = (x.get("fund_name") or "").strip()
+            if n:
+                fund_names.append(n)
+
+        for n in fund_names:
+            if n not in report_text:
+                fund_missing.append(n)
+        consistency_ok = len(fund_missing) == 0
+
+    market_time_ok = False
+    market_time_issue = None
+    if not market_file.exists():
+        market_time_issue = f"缺少 {market_file.relative_to(ROOT_DIR)}"
+    else:
+        try:
+            market = json.loads(market_file.read_text(encoding="utf-8"))
+            fetched_at = (market.get("fetched_at") or "").strip()
+            market_time_ok = fetched_at == TODAY
+            if not market_time_ok:
+                market_time_issue = f"market_data.json fetched_at={fetched_at} != {TODAY}"
+        except Exception as e:
+            market_time_issue = f"market_data.json 解析失败：{e}"
+
+    return {
+        "report_file": report_file,
+        "missing_files": missing_files,
+        "name_ok": name_ok,
+        "fund_missing": fund_missing,
+        "fund_ok": len(fund_missing) == 0,
+        "consistency_ok": consistency_ok,
+        "market_time_ok": market_time_ok,
+        "market_time_issue": market_time_issue,
+    }
+
 # --- Main Execution ---
 if __name__ == "__main__":
+    if args.validate:
+        v = validate_outputs()
+        report_file = v["report_file"]
+        status = {
+            "json": str(JSON_FILE.relative_to(ROOT_DIR)) if JSON_FILE.exists() else "未生成",
+            "brief": str(BRIEF_FILE.relative_to(ROOT_DIR)) if BRIEF_FILE.exists() else "未生成",
+            "report": str(report_file.relative_to(ROOT_DIR)) if report_file.exists() else "未生成",
+            "name_check": "通过" if v["name_ok"] else f"不通过：缺少 {len(v['missing_files'])} 个文件",
+            "fund_check": "通过" if v["fund_ok"] else f"不通过：缺少 {len(v['fund_missing'])} 个标的",
+            "consistency_check": "通过" if v["consistency_ok"] else f"不通过：缺少 {len(v['fund_missing'])} 个标的",
+            "market_time_check": "通过" if v["market_time_ok"] else f"不通过：{v['market_time_issue']}",
+            "cleanup": "无",
+        }
+        update_progress(6, 100, details_checked=[1, 2, 3, 4, 5, 6], product_status=status)
+        if not v["name_ok"]:
+            print("Validation failed: missing files")
+            for p in v["missing_files"]:
+                print("-", p)
+            sys.exit(1)
+        if not v["fund_ok"]:
+            print("Validation failed: missing fund names in report")
+            for n in v["fund_missing"]:
+                print("-", n)
+            sys.exit(1)
+        if not v["market_time_ok"]:
+            print("Validation failed: market data time check")
+            print("-", v["market_time_issue"])
+            sys.exit(1)
+        print("Validation passed.")
+        sys.exit(0)
+
     setup_folders()
     update_progress(1, 10, details_checked=[1], product_status={})
     
@@ -495,3 +620,27 @@ if __name__ == "__main__":
     else:
         print("Failed to generate Brief.")
         sys.exit(1)
+
+    if args.fetch:
+        market_file = REPORT_DIR / "market_data.json"
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT_DIR / "scripts/temp_exec_fetch_market.py"),
+                    "--strategy-json",
+                    str(JSON_FILE),
+                    "--output",
+                    str(market_file),
+                    "--asof",
+                    str(TODAY),
+                ],
+                check=False,
+            )
+        except Exception as e:
+            print(f"Fetch failed: {e}")
+        update_progress(4, 70, details_checked=[1, 2, 3, 4], product_status={
+            "json": str(JSON_FILE.relative_to(ROOT_DIR)),
+            "brief": str(BRIEF_FILE.relative_to(ROOT_DIR)),
+            "report": "未生成",
+        })

@@ -22,3 +22,7 @@ pnpm-debug.log*
 dist/
 build/
 .cache/
+
+报告/
+每日最终报告/
+每周分析报告/

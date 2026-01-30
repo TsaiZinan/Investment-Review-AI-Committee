@@ -14,6 +14,13 @@ FRED_SERIES = [
     "DTWEXBGS",
     "T10YIE",
     "GVZCLS",
+    "CPIAUCSL",
+    "CPILFESL",
+    "PCEPI",
+    "PCEPILFE",
+    "UNRATE",
+    "PAYEMS",
+    "NAPM",
 ]
 
 
@@ -79,6 +86,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--strategy-json", required=True)
     p.add_argument("--output", required=True)
+    p.add_argument("--asof", default=date.today().isoformat())
     args = p.parse_args()
 
     out_path = Path(args.output)
@@ -94,7 +102,7 @@ def main():
             codes.append(c)
     codes = list(dict.fromkeys(codes))
 
-    out = {"fetched_at": date.today().isoformat(), "fred": {}, "funds": {}}
+    out = {"fetched_at": args.asof, "fred": {}, "funds": {}}
     for sid in FRED_SERIES:
         try:
             out["fred"][sid] = fetch_fred_series(sid)
@@ -112,4 +120,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
