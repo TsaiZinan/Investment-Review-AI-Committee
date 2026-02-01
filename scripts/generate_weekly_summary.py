@@ -782,9 +782,20 @@ def compute_weekly(
     return out_text, input_paths, missing_dates, str(out_path)
  
  
-def most_recent_complete_week(today: date) -> Tuple[date, date]:
-    start = today - timedelta(days=today.weekday() + 7)
-    end = start + timedelta(days=6)
+def latest_n_days_range(n: int = 7) -> Tuple[date, date]:
+    latest: Optional[date] = None
+    for p in INPUT_DIR.iterdir():
+        m = FILE_RE.match(p.name)
+        if not m:
+            continue
+        try:
+            d = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if latest is None or d > latest:
+            latest = d
+    end = latest or date.today()
+    start = end - timedelta(days=max(1, n) - 1)
     return start, end
  
  
@@ -798,7 +809,7 @@ def main() -> int:
         week_start = datetime.strptime(args.week_start, "%Y-%m-%d").date()
         week_end = datetime.strptime(args.week_end, "%Y-%m-%d").date()
     else:
-        week_start, week_end = most_recent_complete_week(date.today())
+        week_start, week_end = latest_n_days_range(7)
  
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_text, input_paths, _, out_path_str = compute_weekly(week_start, week_end)
