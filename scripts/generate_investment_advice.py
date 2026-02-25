@@ -7,24 +7,96 @@
 import os
 import json
 import sys
-from datetime import datetime
 
 def read_json(file_path):
     """读取JSON文件"""
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def get_market_data():
-    """获取市场数据"""
-    # 这里模拟获取市场数据
-    # 实际项目中应该调用真实的API
+def write_progress(progress_file, model_name, date_str, stage, completion, details_checked, product_status):
+    content = f"""# 进度记录
+
+- 日期文件夹：报告/{date_str}/
+- 当前阶段：{stage}
+- 完成度：{completion}%
+- 阶段明细：
+  - [{'x' if 1 in details_checked else ' '}] 1) 检查/创建日期文件夹
+  - [{'x' if 2 in details_checked else ' '}] 2) 生成/复用投资策略.json
+  - [{'x' if 3 in details_checked else ' '}] 3) 生成投资简报_{model_name}.md
+  - [{'x' if 4 in details_checked else ' '}] 4) 联网数据搜集完成
+  - [{'x' if 5 in details_checked else ' '}] 5) 输出并保存投资建议报告
+  - [{'x' if 6 in details_checked else ' '}] 6) 校验文件命名、标的命名并清理无关文件（最后检查）
+
+- 产物清单：
+  - 投资策略.json：{product_status.get('json', '未生成')}
+  - 投资简报_{model_name}.md：{product_status.get('brief', '未生成')}
+  - 投资建议报告：{product_status.get('report', '未生成')}
+  - 命名校验：{product_status.get('name_check', '待校验')}
+  - 基金标的覆盖校验：{product_status.get('fund_check', '待校验')}
+  - 标的名称一致性校验：{product_status.get('consistency_check', '待校验')}
+  - 联网数据时间校验：{product_status.get('market_time_check', '待校验')}
+  - 清理记录：{product_status.get('cleanup', '无')}
+"""
+    with open(progress_file, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+def normalize_weights(items):
+    raw = []
+    for x in items:
+        v = x.get("ratio_in_category")
+        try:
+            v = float(v)
+        except Exception:
+            v = 0.0
+        raw.append(max(v, 0.0))
+    s = sum(raw)
+    if s <= 0:
+        n = len(items)
+        return [1.0 / n for _ in range(n)] if n else []
+    return [v / s for v in raw]
+
+def round_to_hundred(pcts, decimals=2):
+    rounded = [round(x, decimals) for x in pcts]
+    diff = round(100.0 - sum(rounded), decimals)
+    if not rounded or abs(diff) < 0.01:
+        return rounded
+    idx = len(rounded) - 1
+    rounded[idx] = round(rounded[idx] + diff, decimals)
+    return rounded
+
+def load_market_data(report_dir):
+    market_file = os.path.join(report_dir, "market_data.json")
+    if not os.path.exists(market_file):
+        return {}
+    try:
+        return read_json(market_file)
+    except Exception:
+        return {}
+
+def get_fred_point(market_data, series_id):
+    fred = (market_data or {}).get("fred") or {}
+    p = fred.get(series_id) or {}
     return {
-        "us_interest_rate": "5.25-5.50%",
-        "us_inflation": "3.4%",
-        "china_pmi": "49.2",
-        "gold_price": "2,048.50 USD/oz",
-        "sp500_pe": "24.5",
-        "china_stocks_valuation": "合理"
+        "id": series_id,
+        "date": p.get("date"),
+        "value": p.get("value"),
+        "url": p.get("url"),
+        "error": p.get("error"),
+    }
+
+def get_fund_point(market_data, fund_code):
+    funds = (market_data or {}).get("funds") or {}
+    p = funds.get(str(fund_code).zfill(6)) or {}
+    data = (p.get("data") or {}) if isinstance(p, dict) else {}
+    return {
+        "fund_code": p.get("fund_code") if isinstance(p, dict) else None,
+        "url": p.get("url") if isinstance(p, dict) else None,
+        "jzrq": data.get("jzrq"),
+        "dwjz": data.get("dwjz"),
+        "gsz": data.get("gsz"),
+        "gszzl": data.get("gszzl"),
+        "gztime": data.get("gztime"),
+        "name": data.get("name"),
     }
 
 def generate_report(model_name, date_str):
@@ -39,147 +111,293 @@ def generate_report(model_name, date_str):
     # 读取投资策略
     strategy = read_json(strategy_file)
     
-    # 获取市场数据
-    market_data = get_market_data()
+    market_data = load_market_data(report_dir)
     
     # 解析投资策略数据
     allocation_summary = strategy.get("allocation_summary", [])
     investment_plan = strategy.get("investment_plan", [])
+    non_investment_holdings = strategy.get("non_investment_holdings", []) or []
+    alloc_ratio_by_cat = {}
+    for x in allocation_summary:
+        c = (x.get("category") or "").strip()
+        try:
+            r = float(x.get("ratio") or 0.0)
+        except Exception:
+            r = 0.0
+        if c:
+            alloc_ratio_by_cat[c] = r
     
     # 构建报告内容
+    category_suggested = dict(alloc_ratio_by_cat)
+    if "债券" in category_suggested and "中股" in category_suggested:
+        category_suggested["债券"] = max(0.0, category_suggested["债券"] + 0.02)
+        category_suggested["中股"] = max(0.0, category_suggested["中股"] - 0.02)
+    total_cat = sum(category_suggested.values())
+    if total_cat > 0:
+        for k in list(category_suggested.keys()):
+            category_suggested[k] = category_suggested[k] / total_cat
+
+    grouped = {}
+    for it in investment_plan:
+        c = (it.get("category") or "").strip()
+        grouped.setdefault(c, []).append(it)
+
+    item_rows = []
+    for cat, items in grouped.items():
+        cat_ratio = alloc_ratio_by_cat.get(cat, 0.0)
+        cat_ratio_sug = category_suggested.get(cat, cat_ratio)
+
+        base_w = normalize_weights(items)
+        w = list(base_w)
+
+        if cat == "中股":
+            for i, it in enumerate(items):
+                sub = (it.get("sub_category") or "").strip()
+                if sub in {"芯片", "消费电子"}:
+                    w[i] *= 0.85
+                if sub in {"中证", "红利低波"}:
+                    w[i] *= 1.10
+            s = sum(w)
+            w = [x / s for x in w] if s > 0 else base_w
+
+        if cat == "美股":
+            for i, it in enumerate(items):
+                sub = (it.get("sub_category") or "").strip()
+                if sub == "医疗保健":
+                    w[i] *= 1.20
+                if sub == "科技":
+                    w[i] *= 0.95
+            s = sum(w)
+            w = [x / s for x in w] if s > 0 else base_w
+
+        current_pcts = [cat_ratio * x * 100.0 for x in base_w]
+        suggested_pcts = [cat_ratio_sug * x * 100.0 for x in w]
+
+        current_pcts_r = [round(x, 2) for x in current_pcts]
+        suggested_pcts_r = [round(x, 2) for x in suggested_pcts]
+
+        for i, it in enumerate(items):
+            fund_name = (it.get("fund_name") or "").strip()
+            fund_code = it.get("fund_code")
+            day = (it.get("day_of_week") or "").strip()
+            sub = (it.get("sub_category") or "").strip()
+            diff = round(suggested_pcts_r[i] - current_pcts_r[i], 2)
+
+            if diff > 0.05:
+                action = "增持"
+            elif diff < -0.05:
+                action = "减持"
+            else:
+                action = "不变"
+
+            reason = "结构微调"
+            if cat == "债券":
+                reason = "高利率环境"
+            elif cat == "中股" and sub in {"芯片", "消费电子"}:
+                reason = "波动偏高"
+            elif cat == "中股" and sub in {"中证", "红利低波"}:
+                reason = "稳健底仓"
+            elif cat == "期货" and sub in {"黄金", "白银"}:
+                reason = "避险对冲"
+            elif cat == "美股" and sub == "医疗保健":
+                reason = "防御属性"
+            elif cat == "美股" and sub == "科技":
+                reason = "估值波动"
+
+            fund_point = get_fund_point(market_data, fund_code) if fund_code else {}
+            if fund_point.get("gszzl") not in (None, "") and sub in {"芯片", "消费电子", "科技"}:
+                reason = "短期波动"
+
+            item_rows.append({
+                "category": cat,
+                "sub_category": sub,
+                "fund_name": fund_name,
+                "day": day,
+                "current_pct": current_pcts_r[i],
+                "suggested_pct": suggested_pcts_r[i],
+                "diff": diff,
+                "action": action,
+                "reason": reason,
+            })
+
+    total_current = sum(x["current_pct"] for x in item_rows)
+    total_suggested = sum(x["suggested_pct"] for x in item_rows)
+    if item_rows:
+        current_fixed = round_to_hundred([x["current_pct"] for x in item_rows], decimals=2)
+        suggested_fixed = round_to_hundred([x["suggested_pct"] for x in item_rows], decimals=2)
+        for i in range(len(item_rows)):
+            item_rows[i]["current_pct"] = current_fixed[i]
+            item_rows[i]["suggested_pct"] = suggested_fixed[i]
+            item_rows[i]["diff"] = round(item_rows[i]["suggested_pct"] - item_rows[i]["current_pct"], 2)
+            if item_rows[i]["diff"] > 0.05:
+                item_rows[i]["action"] = "增持"
+            elif item_rows[i]["diff"] < -0.05:
+                item_rows[i]["action"] = "减持"
+            else:
+                item_rows[i]["action"] = "不变"
+        total_current = sum(current_fixed)
+        total_suggested = sum(suggested_fixed)
+
+    sorted_changes = sorted(
+        [x for x in item_rows if x["action"] != "不变"],
+        key=lambda r: abs(r["diff"]),
+        reverse=True,
+    )
+    top_changes = (sorted_changes[:5] if sorted_changes else sorted(item_rows, key=lambda r: abs(r["diff"]), reverse=True)[:5])
+
+    goal_parts = []
+    for c in ["债券", "中股", "期货", "美股"]:
+        if c in alloc_ratio_by_cat:
+            goal_parts.append(f"{c} {alloc_ratio_by_cat[c]*100:.0f}%")
+    goal_str = " / ".join(goal_parts) if goal_parts else "未提供"
+
     report_content = []
-    
-    # 0. 输入回显
-    report_content.append("### 0. 输入回显")
+    report_content.append("### 0. 输入回显 (Input Echo)")
     report_content.append(f"* 日期：{date_str}")
+    report_content.append(f"* 模型名：{model_name}")
     report_content.append(f"* 定投检视周期：每月")
     report_content.append(f"* 风险偏好：稳健")
-    report_content.append(f"* 定投大类目标：债券 25% / 中股 35% / 期货 20% / 美股 20%")
-    report_content.append(f"* 关键假设：市场流动性中性，地缘风险可控")
+    report_content.append(f"* 定投大类目标：{goal_str}（合计 100%）")
+    report_content.append(f"* 关键假设：仅做小幅结构微调，避免频繁换手")
     report_content.append(f"* 产物路径：")
     report_content.append(f"  - 投资策略.json：报告/{date_str}/投资策略.json")
     report_content.append(f"  - 投资简报_{model_name}.md：报告/{date_str}/简报/投资简报_{model_name}.md")
+    report_content.append(f"  - market_data.json：报告/{date_str}/market_data.json")
+    report_content.append(f"  - 投资建议报告：报告/{date_str}/{date_str}_{model_name}_投资建议.md")
     report_content.append("")
-    
-    # 1. 定投增减要点
-    report_content.append("### 1. 定投增减要点（最多 5 条）")
-    report_content.append("* 债券：增持 25%→30% — 避险需求上升，利率下行预期")
-    report_content.append("* 中股：减持 35%→30% — 经济复苏放缓，估值偏高")
-    report_content.append("* 黄金：增持 12%→15% — 地缘风险溢价，通胀压力")
-    report_content.append("* 美股科技：减持 6.6%→5% — AI泡沫风险，加息影响")
-    report_content.append("* 创新药：增持 3.5%→5% — 政策支持，估值低位")
+
+    report_content.append("### 1. 定投增减要点（最多 5 条）(Top SIP Changes)")
+    for r in top_changes:
+        report_content.append(f"* {r['fund_name']}：{r['action']} {r['current_pct']:.2f}%→{r['suggested_pct']:.2f}% — {r['reason']}")
     report_content.append("")
-    
-    # 2. 大板块比例调整建议
-    report_content.append("### 2. 大板块比例调整建议")
+
+    report_content.append("### 2. 大板块比例调整建议（必须）(Category Allocation Changes)")
     report_content.append("| 大板块 | 当前% | 建议% | 变动 | 建议（增配/减配/不变） | 简短理由 |")
     report_content.append("|---|---:|---:|---:|---|---|")
-    report_content.append("| 债券 | 25.00 | 30.00 | +5.00 | 增配 | 避险需求，利率下行周期")
-    report_content.append("| 中股 | 35.00 | 30.00 | -5.00 | 减配 | 经济复苏放缓，估值偏高")
-    report_content.append("| 期货 | 20.00 | 20.00 | 0.00 | 不变 | 黄金避险价值，有色金属高位震荡")
-    report_content.append("| 美股 | 20.00 | 20.00 | 0.00 | 不变 | 科技股调整，医疗保健稳健")
+    for c in ["债券", "中股", "期货", "美股"]:
+        if c not in alloc_ratio_by_cat:
+            continue
+        cur = round(alloc_ratio_by_cat.get(c, 0.0) * 100.0, 2)
+        sug = round(category_suggested.get(c, alloc_ratio_by_cat.get(c, 0.0)) * 100.0, 2)
+        delta = round(sug - cur, 2)
+        if delta > 0.05:
+            act = "增配"
+        elif delta < -0.05:
+            act = "减配"
+        else:
+            act = "不变"
+        reason = "稳健平衡"
+        if c == "债券" and act == "增配":
+            reason = "高利率防守"
+        if c == "中股" and act == "减配":
+            reason = "波动偏高"
+        report_content.append(f"| {c} | {cur:.2f} | {sug:.2f} | {delta:+.2f} | {act} | {reason} |")
     report_content.append("")
-    
-    # 3. 定投计划逐项建议
-    report_content.append("### 3. 定投计划逐项建议")
+
+    report_content.append("### 3. 定投计划逐项建议（全量，逐项表格）(Per-Item Actions)")
     report_content.append("| 大板块 | 小板块 | 标的 | 定投日 | 当前% | 建议% | 变动 | 建议（增持/减持/不变） | 简短理由 |")
     report_content.append("|---|---|---|---|---:|---:|---:|---|---|")
-    
-    # 债券板块
-    report_content.append("| 债券 | 国债 | 上银中债5-10年国开行债券指数A | 周三 | 12.50 | 15.00 | +2.50 | 增持 | 长端利率下行，配置价值提升")
-    report_content.append("| 债券 | 国债 | 南方中债7-10年国开行债券指数A | 周四 | 12.50 | 15.00 | +2.50 | 增持 | 国开行债券信用风险低，收益稳定")
-    
-    # 中股板块
-    report_content.append("| 中股 | 汽车 | 广发汽车指数A | 周一 | 3.50 | 3.00 | -0.50 | 减持 | 汽车行业竞争加剧，增速放缓")
-    report_content.append("| 中股 | 消费电子 | 富国中证消费电子主题ETF联接A | 周二 | 4.55 | 4.00 | -0.55 | 减持 | 消费电子需求疲软，库存压力")
-    report_content.append("| 中股 | 中证 | 广发沪深300ETF联接C | 周四 | 7.00 | 6.00 | -1.00 | 减持 | 大盘指数估值偏高，波动加大")
-    report_content.append("| 中股 | 光伏 | 国泰中证光伏产业ETF联接A | 周三 | 3.15 | 3.00 | -0.15 | 减持 | 光伏产能过剩，竞争加剧")
-    report_content.append("| 中股 | 芯片 | 富国中证芯片产业ETF联接A | 周四 | 5.25 | 4.50 | -0.75 | 减持 | 芯片估值偏高，国产化进程放缓")
-    report_content.append("| 中股 | 商业航天 | 永赢高端装备智选混合A | 周四 | 3.50 | 3.00 | -0.50 | 减持 | 商业航天发展低于预期，估值高")
-    report_content.append("| 中股 | 创新药 | 广发创新药产业ETF联接A | 周三 | 1.75 | 2.50 | +0.75 | 增持 | 创新药政策支持，估值低位")
-    report_content.append("| 中股 | 创新药 | 广发港股创新药ETF联接(QDII)A | 周二 | 1.75 | 2.50 | +0.75 | 增持 | 港股创新药估值更低，性价比高")
-    report_content.append("| 中股 | 红利低波 | 华泰柏瑞中证红利低波动ETF联接A | 周三 | 3.50 | 3.00 | -0.50 | 减持 | 红利股估值修复，空间有限")
-    report_content.append("| 中股 | 房地产 | 南方中证全指房地产ETF联接A | 周一 | 1.05 | 1.00 | -0.05 | 不变 | 房地产政策边际改善，企稳迹象")
-    
-    # 期货板块
-    report_content.append("| 期货 | 有色 | 南方中证申万有色金属ETF联接A | 周二 | 6.00 | 5.00 | -1.00 | 减持 | 有色金属价格高位，回调风险")
-    report_content.append("| 期货 | 白银 | 国投瑞银白银期货(LOF)C | 周二 | 2.00 | 2.00 | 0.00 | 不变 | 白银波动性大，保持配置")
-    report_content.append("| 期货 | 黄金 | 华安黄金 | 周一 | 12.00 | 13.00 | +1.00 | 增持 | 黄金避险价值凸显，通胀对冲")
-    
-    # 美股板块
-    report_content.append("| 美股 | 科技 | 广发全球精选股票(QDII)A | 周二 | 6.60 | 5.00 | -1.60 | 减持 | 美股科技股估值偏高，加息影响")
-    report_content.append("| 美股 | 科技 | 广发纳斯达克100ETF联接(QDII)C | 周三 | 6.60 | 5.00 | -1.60 | 减持 | 纳斯达克指数高位，回调风险")
-    report_content.append("| 美股 | 医疗保健 | 广发全球医疗保健指数(QDII)A | 周一 | 6.80 | 10.00 | +3.20 | 增持 | 医疗保健防御性强，估值合理")
+    for r in item_rows:
+        report_content.append(
+            f"| {r['category']} | {r['sub_category']} | {r['fund_name']} | {r['day']} | {r['current_pct']:.2f} | {r['suggested_pct']:.2f} | {r['diff']:+.2f} | {r['action']} | {r['reason']} |"
+        )
     report_content.append("")
-    
-    # 4. 新的定投方向建议
-    report_content.append("### 4. 新的定投方向建议")
+
+    report_content.append("### 4. 新的定投方向建议（如有）(New SIP Directions)")
     report_content.append("| 行业/主题 | 建议定投比例 | 口径 | 简短理由 |")
     report_content.append("|---|---:|---|---|")
-    report_content.append("| 人工智能 | 3% | 全组合 | AI产业长期成长空间大")
-    report_content.append("| 绿色能源 | 2% | 全组合 | 全球能源转型趋势明确")
-    report_content.append("| 消费升级 | 2% | 全组合 | 居民收入提升，消费结构优化")
+    report_content.append("| 无 | 0.00 | 占全组合 | 优先执行结构调整 |")
     report_content.append("")
-    
-    # 5. 执行指令
-    report_content.append("### 5. 执行指令（下一周期）")
-    report_content.append("* 定投：维持现有定投频率，调整金额比例")
-    report_content.append("* 资金池：沪深300指数跌破3800点时加仓中证ETF")
-    report_content.append("* 风险控制：")
-    report_content.append("  - 组合最大回撤控制在15%以内")
-    report_content.append("  - 单个标的最大亏损控制在20%以内")
-    report_content.append("  - 市场大幅波动时暂停定投，等待企稳")
+
+    report_content.append("### 4.1 非定投持仓说明 (Non-SIP Holdings)")
+    if non_investment_holdings:
+        report_content.append("| 大板块 | 小板块 | 标的 | 当前持有 |")
+        report_content.append("|---|---|---|---:|")
+        for x in non_investment_holdings:
+            report_content.append(
+                f"| {(x.get('category') or '').strip()} | {(x.get('sub_category') or '').strip()} | {(x.get('fund_name') or '').strip()} | {(x.get('current_holding') or 0):.2f} |"
+            )
+    else:
+        report_content.append("无")
     report_content.append("")
-    
-    # 6. 现有持仓建议
-    report_content.append("### 6. 现有持仓建议")
-    report_content.append("* 北证50：保持观望 — 北证估值偏高，等待回调")
-    report_content.append("* 创新药C类：转换为A类 — 长期持有，降低赎回费")
-    report_content.append("* 余额宝：保持流动性 — 保留应急资金，收益率稳定")
-    report_content.append("* 港股创新药：继续持有 — 估值低位，政策支持")
-    report_content.append("* 半导体芯片：分批减仓 — 估值偏高，行业周期下行")
+
+    report_content.append("### 5. 关键市场观察 (Key Market Observations)")
+    obs = []
+    dgs10 = get_fred_point(market_data, "DGS10")
+    if dgs10.get("value") is not None:
+        obs.append(f"* 美债10Y {dgs10['value']:.2f}%（{dgs10.get('date')}，FRED）")
+    dgs2 = get_fred_point(market_data, "DGS2")
+    if dgs2.get("value") is not None:
+        obs.append(f"* 美债2Y {dgs2['value']:.2f}%（{dgs2.get('date')}，FRED）")
+    t10y2y = get_fred_point(market_data, "T10Y2Y")
+    if t10y2y.get("value") is not None:
+        obs.append(f"* 10Y-2Y 利差 {t10y2y['value']:.2f}%（{t10y2y.get('date')}，FRED）")
+    t10yie = get_fred_point(market_data, "T10YIE")
+    if t10yie.get("value") is not None:
+        obs.append(f"* 10Y通胀预期 {t10yie['value']:.2f}%（{t10yie.get('date')}，FRED）")
+    gvz = get_fred_point(market_data, "GVZCLS")
+    if gvz.get("value") is not None:
+        obs.append(f"* 黄金波动指数GVZ {gvz['value']:.2f}（{gvz.get('date')}，FRED）")
+    usdcny = get_fred_point(market_data, "DEXCHUS")
+    if usdcny.get("value") is not None:
+        obs.append(f"* USD/CNY {usdcny['value']:.3f}（{usdcny.get('date')}，FRED）")
+    report_content.extend(obs[:6] if obs else ["* 本次无可用宏观数据点（market_data.json 缺失或解析失败）"])
     report_content.append("")
-    
-    # 7. 数据来源
-    report_content.append("### 7. 数据来源")
-    report_content.append(f"1. 美国利率：{market_data['us_interest_rate']}（2026-01-26，美联储）")
-    report_content.append(f"2. 美国通胀：{market_data['us_inflation']}（2026-01-26，劳工部）")
-    report_content.append(f"3. 中国PMI：{market_data['china_pmi']}（2026-01-26，国家统计局）")
-    report_content.append(f"4. 黄金价格：{market_data['gold_price']}（2026-01-26，COMEX）")
-    report_content.append(f"5. 标普500估值：{market_data['sp500_pe']}（2026-01-26，Yahoo Finance）")
-    report_content.append(f"6. 中国股市估值：{market_data['china_stocks_valuation']}（2026-01-26，Wind）")
-    report_content.append(f"7. 债券收益率：3.15%（2026-01-26，中债登）")
-    report_content.append(f"8. 全球经济展望：温和增长（2026-01-26，IMF）")
+
+    report_content.append("### 6. 风险提示 (Risk Warnings)")
+    report_content.append("* 中股主题类（芯片/消费电子）波动可能放大。")
+    report_content.append("* 海外利率若再上行，长久期资产短期承压。")
+    report_content.append("* 贵金属与商品受美元与实际利率影响较大。")
+    report_content.append("* QDII 受汇率与海外市场双重波动影响。")
+    report_content.append("")
+
+    report_content.append("### 7. 执行建议 (Execution Suggestions)")
+    report_content.append("* 本次仅做小幅比例调整，按周定投节奏执行。")
+    report_content.append("* 若单周大幅回撤，优先补充“稳健底仓”（沪深300/红利低波）。")
+    report_content.append("* 主题类（芯片/消费电子）严格按建议%执行，不追涨。")
+    report_content.append("* 记录本周执行后各标的建议%偏离，次月复盘再校准。")
+    report_content.append("")
+
+    report_content.append("### 7. 数据来源 (Sources)")
+    fetched_at = (market_data or {}).get("fetched_at")
+    if fetched_at:
+        report_content.append(f"1. market_data.json（{fetched_at}）")
+    report_content.append(f"2. 投资策略.json（{date_str}）")
+    if dgs10.get("url") and dgs10.get("date"):
+        report_content.append(f"3. FRED {dgs10['id']}（{dgs10['date']}）")
+    if dgs2.get("url") and dgs2.get("date"):
+        report_content.append(f"4. FRED {dgs2['id']}（{dgs2['date']}）")
+    if t10y2y.get("url") and t10y2y.get("date"):
+        report_content.append(f"5. FRED {t10y2y['id']}（{t10y2y['date']}）")
+    if t10yie.get("url") and t10yie.get("date"):
+        report_content.append(f"6. FRED {t10yie['id']}（{t10yie['date']}）")
+    if gvz.get("url") and gvz.get("date"):
+        report_content.append(f"7. FRED {gvz['id']}（{gvz['date']}）")
+    if usdcny.get("url") and usdcny.get("date"):
+        report_content.append(f"8. FRED {usdcny['id']}（{usdcny['date']}）")
     
     # 保存报告
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write('\n'.join(report_content))
     
-    # 更新进度文件
-    progress_content = f"""# 进度报告
-
-- 日期文件夹：报告/{date_str}
-- 当前阶段：6
-- 完成度：100%
-- 阶段明细：
-  - [x] 1) 检查/创建日期文件夹
-  - [x] 2) 生成/复用投资策略.json
-  - [x] 3) 生成投资简报_{model_name}.md
-  - [x] 4) 联网数据搜集完成
-  - [x] 5) 输出并保存投资建议报告
-  - [x] 6) 校验文件命名、标的命名并清理无关文件（最后检查）
-- 产物清单：
-  - 投资策略.json：报告/{date_str}/投资策略.json
-  - 投资简报_{model_name}.md：报告/{date_str}/简报/投资简报_{model_name}.md
-  - 投资建议报告：报告/{date_str}/{date_str}_{model_name}_投资建议.md
-  - 命名校验：通过
-  - 基金标的覆盖校验：通过
-  - 标的名称一致性校验：通过
-  - 清理记录：无
-"""
-    
-    with open(progress_file, 'w', encoding='utf-8') as f:
-        f.write(progress_content)
+    write_progress(
+        progress_file=progress_file,
+        model_name=model_name,
+        date_str=date_str,
+        stage=5,
+        completion=90,
+        details_checked=[1, 2, 3, 4, 5],
+        product_status={
+            "json": f"报告/{date_str}/投资策略.json",
+            "brief": f"报告/{date_str}/简报/投资简报_{model_name}.md",
+            "report": f"报告/{date_str}/{date_str}_{model_name}_投资建议.md",
+            "name_check": "待校验",
+            "fund_check": "待校验",
+            "consistency_check": "待校验",
+            "market_time_check": "待校验",
+            "cleanup": "无",
+        },
+    )
     
     print(f"生成报告：{output_file}")
     print(f"更新进度：{progress_file}")

@@ -16,8 +16,11 @@ def load_json(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
+def _bp_to_pct(bp: int):
+    return bp / 100
+
 def _bp_to_pct_str(bp: int):
-    return f"{bp / 100:.2f}"
+    return f"{_bp_to_pct(bp):.2f}%"
 
 def _action_from_diff_bp(diff_bp: int):
     if diff_bp >= 15:
@@ -216,7 +219,7 @@ def generate_report_content(strategy, market_data, model_name, today_str):
 
     cat_order, cat_curr_bp, cat_prop_bp, item_rows, signals = _build_category_plan(strategy, market_data)
 
-    alloc_echo = " / ".join([f"{c} {_bp_to_pct_str(cat_prop_bp.get(c, 0))}%" for c in cat_order])
+    alloc_echo = " / ".join([f"{c} {_bp_to_pct_str(cat_prop_bp.get(c, 0))}" for c in cat_order])
 
     fred = (market_data or {}).get("fred", {})
     fred_parts = []
@@ -253,7 +256,7 @@ def generate_report_content(strategy, market_data, model_name, today_str):
         curr = _bp_to_pct_str(r["curr_bp"])
         prop = _bp_to_pct_str(r["prop_bp"])
         reason = "防御+估值低" if "医疗" in r["sub_category"] else "估值偏高" if r["sub_category"] in {"芯片"} else "震荡加仓" if r["fund_name"].endswith("沪深300ETF联接C") else "现金流稳" if r["sub_category"] == "红利低波" else "波动加大" if r["sub_category"] == "消费电子" else "跟随调整"
-        md.append(f"* {r['fund_name']}：{action} {curr}%→{prop}% — {reason}")
+        md.append(f"* {r['fund_name']}：{action} {curr}→{prop} — {reason}")
     if not deltas:
         md.append("* 全部标的：不变 — 本周期维持既定配置")
     md.append("")
@@ -276,7 +279,7 @@ def generate_report_content(strategy, market_data, model_name, today_str):
             reason = "偏防御配置" if signals.get("risk_off", 0) >= 1 else "维持结构"
         else:
             reason = "跟随策略"
-        md.append(f"| {c} | {_bp_to_pct_str(curr_bp)} | {_bp_to_pct_str(prop_bp)} | {diff_bp/100:+.2f} | {action} | {reason} |")
+        md.append(f"| {c} | {_bp_to_pct_str(curr_bp)} | {_bp_to_pct_str(prop_bp)} | {_bp_to_pct(diff_bp):+.2f}% | {action} | {reason} |")
     md.append("")
 
     md.append("### 3. 定投计划逐项建议（全量，逐项表格）(Per-Item Actions)")
@@ -287,7 +290,7 @@ def generate_report_content(strategy, market_data, model_name, today_str):
         action = _action_from_diff_bp(diff_bp)
         reason = "稳健压舱" if r["category"] == "债券" else "震荡加仓" if r["sub_category"] == "中证" else "估值偏高" if r["sub_category"] == "芯片" else "波动加大" if r["sub_category"] == "消费电子" else "现金流稳" if r["sub_category"] == "红利低波" else "高波动控仓" if r["category"] == "期货" else "偏防御" if r["sub_category"] == "医疗保健" else "跟随调整"
         md.append(
-            f"| {r['category']} | {r['sub_category']} | {r['fund_name']} | {r['day_of_week']} | {_bp_to_pct_str(r['curr_bp'])} | {_bp_to_pct_str(r['prop_bp'])} | {diff_bp/100:+.2f} | {action} | {reason} |"
+            f"| {r['category']} | {r['sub_category']} | {r['fund_name']} | {r['day_of_week']} | {_bp_to_pct_str(r['curr_bp'])} | {_bp_to_pct_str(r['prop_bp'])} | {_bp_to_pct(diff_bp):+.2f}% | {action} | {reason} |"
         )
     md.append("")
 
@@ -299,8 +302,22 @@ def generate_report_content(strategy, market_data, model_name, today_str):
 
     md.append("### 5. 执行指令（下一周期）(Next Actions)")
     md.append("* 定投：维持（板块不变，板块内按“建议%”微调）")
-    md.append("* 资金池：沪深300单周回撤≥3%时，优先加仓“广发沪深300ETF联接C”")
-    md.append("* 风险控制：1) 期货单日大涨大跌不追涨 2) 美股科技连跌分批 3) 组合回撤>10%降风险")
+    plan = (strategy or {}).get("investment_plan", []) or []
+    pool_fund = None
+    for it in plan:
+        n = (it.get("fund_name") or "").strip()
+        if not n:
+            continue
+        if "沪深300" in n or "中证500" in n or "中证A500" in n:
+            pool_fund = n
+            break
+    if not pool_fund and plan:
+        pool_fund = (plan[0].get("fund_name") or "").strip() or None
+    if pool_fund:
+        md.append(f"* 资金池：权益类单周回撤≥3%时，优先加仓“{pool_fund}”")
+    else:
+        md.append("* 资金池：权益类单周回撤≥3%时，优先加仓“中股核心指数”")
+    md.append("* 风险控制：1) 分批执行 2) 期货不追涨杀跌 3) 回撤>10%降风险")
     md.append("")
 
     md.append("### 6. 现有持仓建议（最多 5 点）(Holdings Notes)")
@@ -308,17 +325,16 @@ def generate_report_content(strategy, market_data, model_name, today_str):
     non_names = [str(x.get("fund_name") or "").strip() for x in non_inv if str(x.get("fund_name") or "").strip()]
     if non_names:
         joined = " / ".join(non_names)
-        md.append(f"* {joined}：持有 — 非定投底仓检视")
+        md.append(f"* {joined}：持有 — 底仓定期复核")
     else:
         md.append("* 非定投持仓：无 — ")
-    md.append("* 港股创新药：分批观测 — 波动较大")
-    md.append("* 货币基金：保持 — 应急现金")
-    md.append("* 北证：控仓 — 波动偏高")
-    md.append("* 芯片存量：不加仓 — 估值偏高")
+    if signals.get("risk_off", 0) >= 2:
+        md.append("* 权益仓位：分批执行 — 降追涨风险")
+    md.append("* 定投节奏：不加杠杆 — 控回撤")
     md.append("")
 
     md.append("### 7. 数据来源 (Sources)")
-    for sid in ["DFII10", "T10Y2Y", "CPIAUCSL", "UNRATE", "NAPM", "DTWEXBGS"]:
+    for sid in ["DFII10", "T10Y2Y", "DTWEXBGS", "DEXCHUS", "NAPM"]:
         obs = _get_fred_obs(market_data, sid)
         if not obs:
             continue
@@ -326,6 +342,9 @@ def generate_report_content(strategy, market_data, model_name, today_str):
     pmi_source = (market_data or {}).get("china_pmi_source")
     if pmi_source:
         md.append(f"* {pmi_source}")
+    xau = ((market_data or {}).get("stooq", {}) or {}).get("xauusd") or {}
+    if xau.get("close") is not None and xau.get("date"):
+        md.append(f"* {xau['date']} Stooq XAUUSD close={xau['close']}：{xau.get('url') or 'https://stooq.com/q/d/?s=xauusd'}")
     md.append(f"* {today_str} Eastmoney 基金估值接口：market_data.json funds[*].url")
 
     return "\n".join(md)

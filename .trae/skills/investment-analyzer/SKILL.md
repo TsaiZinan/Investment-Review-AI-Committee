@@ -7,8 +7,12 @@ model_candidates:
   - GPT-5.2
   - Grok-4
   - GLM-4.7
+  - GLM-5
   - Kimi
   - MiniMax-M2.1
+  - MiniMax-M2.5
+  - TraeAI
+  - Germini-3-Pro
   - TraeAI
 ---
 

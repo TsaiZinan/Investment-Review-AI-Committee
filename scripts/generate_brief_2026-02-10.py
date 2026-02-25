@@ -2,10 +2,14 @@
 # -*- coding: utf-8 -*-
 
 import json
+from pathlib import Path
 
 def generate_investment_brief():
+    date_str = "2026-02-10"
+    report_dir = Path(f"报告/{date_str}")
+    
     # Load the investment strategy JSON
-    with open('报告/2026-02-02/投资策略.json', 'r', encoding='utf-8') as f:
+    with open(report_dir / "投资策略.json", 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     # Calculate totals for various values
@@ -27,7 +31,7 @@ def generate_investment_brief():
 
     # Generate the markdown content
     markdown_content = '# 投资策略（由 JSON 转换）\n'
-    markdown_content += '来源：[投资策略.json](file:///Users/cai/SynologyDrive/Project/#ProjectLife-000000-理财/报告/2026-02-02/投资策略.json)\n\n'
+    markdown_content += f'来源：[投资策略.json](file:///Users/cai/SynologyDrive/Project/#ProjectLife-000000-理财/报告/{date_str}/投资策略.json)\n\n'
     markdown_content += '### 1. 配置概览\n'
     markdown_content += '- 资产大类目标比例合计：{:.2f}%\n'.format(allocation_total * 100)
     markdown_content += '- 定投计划覆盖大类：{}\n'.format(' / '.join(investment_categories))
@@ -92,34 +96,6 @@ def generate_investment_brief():
                 
                 markdown_content += '| {} | {} | {} | {:.2f}% | {} | {} | {} | {} | {} | {:.2f} |\n'.format(
                     sub_cat, fund_name, fund_code, ratio_in_cat_pct, full_ratio_str, day_of_week, 
-                    long_term, mid_term, short_term, current_holding)
-            
-            markdown_content += '\n小计（{}）当前持有：{:.2f}\n\n'.format(cat, cat_current_holding)
-            section_num += 1
-
-    # Handle categories in investment_plan that weren't in allocation_summary
-    for cat in plan_by_category:
-        if cat not in categories_order:
-            markdown_content += '#### 3.{} {}（目标 未知%）\n'.format(section_num, cat)
-            markdown_content += '| 子类 | 标的 | 基金代码 | 大类内占比 | 全组合目标占比（推导） | 定投日 | 长期 | 中期 | 短期 | 当前持有 |\n|---|---|---|---:|---:|---|---|---|---|---:|\n'
-            
-            cat_current_holding = 0
-            for plan in plan_by_category[cat]:
-                sub_cat = plan['sub_category']
-                fund_name = plan['fund_name']
-                fund_code = plan['fund_code'] if plan['fund_code'] is not None else ''
-                ratio_in_cat_pct = plan['ratio_in_category'] * 100
-                full_ratio_pct = ''  # Unknown since category ratio is unknown
-                day_of_week = plan['day_of_week']
-                long_term = plan['long_term_assessment']
-                mid_term = plan['mid_term_assessment']
-                short_term = plan['short_term_assessment']
-                current_holding = plan['current_holding'] if plan['current_holding'] is not None else 0
-                
-                cat_current_holding += current_holding
-                
-                markdown_content += '| {} | {} | {} | {:.2f}% | {} | {} | {} | {} | {} | {:.2f} |\n'.format(
-                    sub_cat, fund_name, fund_code, ratio_in_cat_pct, full_ratio_pct, day_of_week, 
                     long_term, mid_term, short_term, current_holding)
             
             markdown_content += '\n小计（{}）当前持有：{:.2f}\n\n'.format(cat, cat_current_holding)
@@ -231,10 +207,13 @@ def generate_investment_brief():
                     plan["fund_name"], weekly_amount_calc, plan["day_of_week"])
 
     # Write to file
-    with open('报告/2026-02-02/简报/投资简报_Qwen-3-Coder.md', 'w', encoding='utf-8') as f:
+    brief_dir = report_dir / "简报"
+    brief_dir.mkdir(parents=True, exist_ok=True)
+    
+    with open(brief_dir / '投资简报_Kimi-K2.5.md', 'w', encoding='utf-8') as f:
         f.write(markdown_content)
 
-    print('Investment brief generated successfully.')
+    print(f'Investment brief generated successfully: {brief_dir}/投资简报_Kimi-K2.5.md')
 
 if __name__ == '__main__':
     generate_investment_brief()

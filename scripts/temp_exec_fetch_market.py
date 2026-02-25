@@ -14,6 +14,7 @@ FRED_SERIES = [
     "DTWEXBGS",
     "T10YIE",
     "GVZCLS",
+    "DEXCHUS",
     "CPIAUCSL",
     "CPILFESL",
     "PCEPI",
@@ -81,6 +82,38 @@ def fetch_fund_estimate(fund_code: str):
         data = None
     return {"fund_code": fund_code, "url": url, "data": data}
 
+def fetch_stooq_daily(symbol: str):
+    url = f"https://stooq.com/q/d/l/?s={symbol}&i=d"
+    with urllib.request.urlopen(url, timeout=20) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+
+    rows = list(csv.reader(raw.splitlines()))
+    if len(rows) < 2:
+        return {"symbol": symbol, "url": url, "date": None, "close": None}
+
+    header = [h.strip().lower() for h in rows[0]]
+    try:
+        date_idx = header.index("date")
+        close_idx = header.index("close")
+    except ValueError:
+        return {"symbol": symbol, "url": url, "date": None, "close": None}
+
+    last_date = None
+    last_close = None
+    for r in rows[1:]:
+        if len(r) <= max(date_idx, close_idx):
+            continue
+        d = (r[date_idx] or "").strip()
+        c = (r[close_idx] or "").strip()
+        if not d or not c:
+            continue
+        try:
+            last_date = d
+            last_close = float(c)
+        except ValueError:
+            continue
+
+    return {"symbol": symbol, "url": url, "date": last_date, "close": last_close}
 
 def main():
     p = argparse.ArgumentParser()
@@ -114,6 +147,11 @@ def main():
             out["funds"][code] = fetch_fund_estimate(code)
         except Exception as e:
             out["funds"][code] = {"fund_code": code, "url": f"https://fundgz.1234567.com.cn/js/{code}.js", "data": None, "error": str(e)}
+
+    try:
+        out["stooq"] = {"xauusd": fetch_stooq_daily("xauusd")}
+    except Exception as e:
+        out["stooq"] = {"xauusd": {"symbol": "xauusd", "url": "https://stooq.com/q/d/?s=xauusd", "date": None, "close": None, "error": str(e)}}
 
     out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
 

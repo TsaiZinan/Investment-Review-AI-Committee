@@ -270,6 +270,58 @@ def fmt_delta(delta: Optional[float]) -> str:
         return "—"
     return f"Δ {delta:+.2f}%"
  
+
+def signal_score_from_main_dirs(main_dirs: List[Optional[str]], *, label_inc: str, label_dec: str) -> Optional[float]:
+    inc_days = sum(1 for x in main_dirs if x == label_inc)
+    dec_days = sum(1 for x in main_dirs if x == label_dec)
+    flat_days = sum(1 for x in main_dirs if x == "不变")
+    total = inc_days + dec_days + flat_days
+    if total <= 0:
+        return None
+    return (inc_days - dec_days) / total
+
+
+def signal_action(score: Optional[float], *, is_category: bool) -> str:
+    if score is None:
+        return "—"
+    if score >= 0.20:
+        return "增配" if is_category else "增持"
+    if score <= -0.20:
+        return "减配" if is_category else "减持"
+    return "维持"
+
+
+def signal_strength(score: Optional[float]) -> str:
+    if score is None:
+        return "—"
+    return f"{abs(score) * 100:.2f}%"
+
+
+def signal_trend(early_score: Optional[float], late_score: Optional[float], *, is_category: bool) -> str:
+    if early_score is None or late_score is None:
+        return "—"
+    early_action = signal_action(early_score, is_category=is_category)
+    late_action = signal_action(late_score, is_category=is_category)
+    if early_action != late_action and early_action != "维持" and late_action != "维持":
+        return f"反转：{early_action}→{late_action}"
+    early_strength = abs(early_score)
+    late_strength = abs(late_score)
+    if late_strength - early_strength >= 0.20:
+        return "变强"
+    if early_strength - late_strength >= 0.20:
+        return "变弱"
+    return "稳定"
+
+
+def signal_trend_metric(early_score: Optional[float], late_score: Optional[float], *, is_category: bool) -> Optional[float]:
+    if early_score is None or late_score is None:
+        return None
+    early_action = signal_action(early_score, is_category=is_category)
+    late_action = signal_action(late_score, is_category=is_category)
+    if early_action != late_action and early_action != "维持" and late_action != "维持":
+        return 1.0
+    return abs(abs(late_score) - abs(early_score))
+
  
 def trend_label(
     start_med: Optional[float],
@@ -307,6 +359,23 @@ def direction_week_counts(
     flat = sum(1 for x in main_dirs if x == "不变")
     nop = sum(1 for x in main_dirs if x == "无明显偏向")
     return f"增{inc}天/减{dec}天/不变{flat}天/无偏{nop}天"
+
+
+def direction_arrows(
+    main_dirs: List[Optional[str]],
+    *,
+    label_inc: str,
+    label_dec: str,
+) -> str:
+    out = []
+    for x in main_dirs:
+        if x == label_inc:
+            out.append("↑")
+        elif x == label_dec:
+            out.append("↓")
+        else:
+            out.append("-")
+    return "".join(out) if out else "—"
  
  
 def safe_median(values: List[float]) -> Optional[float]:
@@ -514,12 +583,14 @@ def compute_weekly(
     report_day_first = input_dates[0] if input_dates else week_start
     report_day_last = input_dates[-1] if input_dates else week_end
  
+    n_days = len(input_dates)
+    k_half = max(1, n_days // 2) if n_days else 0
+
     cat_rows: List[List[str]] = []
-    cat_weekly_metrics: Dict[str, Dict[str, object]] = {}
+    cat_signal_metrics: Dict[str, Dict[str, object]] = {}
     for cat in categories:
         per_day = category_days.get(cat, {})
         main_dirs: List[Optional[str]] = []
-        all_pcts: List[float] = []
         missing_in_inputs = 0
         for d in input_dates:
             rd = per_day.get(d)
@@ -529,21 +600,12 @@ def compute_weekly(
                 continue
             dir_stats = [direction_to_stat(rd.dir_raw_by_model.get(m), is_category=True) for m in rd.dir_raw_by_model.keys()]
             main_dirs.append(calc_main_direction(dir_stats, label_inc="增配", label_dec="减配"))
-            for v in rd.pct_by_model.values():
-                if v is not None:
-                    all_pcts.append(v)
-        start_pcts = []
-        end_pcts = []
-        if input_dates:
-            first_rd = per_day.get(report_day_first)
-            last_rd = per_day.get(report_day_last)
-            if first_rd:
-                start_pcts = [v for v in first_rd.pct_by_model.values() if v is not None]
-            if last_rd:
-                end_pcts = [v for v in last_rd.pct_by_model.values() if v is not None]
-        start_med = safe_median(start_pcts)
-        end_med = safe_median(end_pcts)
-        tlabel, delta = trend_label(start_med, end_med, main_dirs)
+        week_score = signal_score_from_main_dirs(main_dirs, label_inc="增配", label_dec="减配")
+        early_score = signal_score_from_main_dirs(main_dirs[:k_half], label_inc="增配", label_dec="减配") if k_half else None
+        late_score = signal_score_from_main_dirs(main_dirs[-k_half:], label_inc="增配", label_dec="减配") if k_half else None
+        action = signal_action(week_score, is_category=True)
+        strength = signal_strength(week_score)
+        s_trend = signal_trend(early_score, late_score, is_category=True)
         remark_parts = []
         if missing_in_inputs:
             remark_parts.append(f"该行在纳入日报中缺失 {missing_in_inputs} 天")
@@ -551,31 +613,32 @@ def compute_weekly(
             remark_parts.append("周初数据缺失")
         if input_dates and per_day.get(report_day_last) is None:
             remark_parts.append("周末数据缺失")
-        if input_dates and per_day.get(report_day_first) and start_med is None:
-            remark_parts.append("周初该行建议%全缺失")
-        if input_dates and per_day.get(report_day_last) and end_med is None:
-            remark_parts.append("周末该行建议%全缺失")
         remark = "；".join(remark_parts) if remark_parts else ""
  
         row = [
             cat,
             direction_week_counts(main_dirs, label_inc="增配", label_dec="减配"),
-            pct_range(all_pcts),
-            format_pct(start_med) if start_med is not None else "—",
-            format_pct(end_med) if end_med is not None else "—",
-            fmt_delta(delta),
-            tlabel,
+            direction_arrows(main_dirs, label_inc="增配", label_dec="减配"),
+            action,
+            strength,
+            s_trend,
             remark or "—",
         ]
         cat_rows.append(row)
-        cat_weekly_metrics[cat] = {"delta": delta, "range": pct_range(all_pcts), "dirs": direction_week_counts(main_dirs, label_inc="增配", label_dec="减配")}
+        cat_signal_metrics[cat] = {
+            "dirs": direction_week_counts(main_dirs, label_inc="增配", label_dec="减配"),
+            "action": action,
+            "strength": strength,
+            "strength_value": abs(week_score) if week_score is not None else None,
+            "trend": s_trend,
+            "trend_value": signal_trend_metric(early_score, late_score, is_category=True),
+        }
  
     item_rows: List[List[str]] = []
-    item_weekly_metrics: Dict[str, Dict[str, object]] = {}
+    item_signal_metrics: Dict[str, Dict[str, object]] = {}
     for it in items:
         per_day = item_days.get(it, {})
         main_dirs = []
-        all_pcts = []
         missing_in_inputs = 0
         for d in input_dates:
             rd = per_day.get(d)
@@ -585,21 +648,12 @@ def compute_weekly(
                 continue
             dir_stats = [direction_to_stat(rd.dir_raw_by_model.get(m), is_category=False) for m in rd.dir_raw_by_model.keys()]
             main_dirs.append(calc_main_direction(dir_stats, label_inc="增持", label_dec="减持"))
-            for v in rd.pct_by_model.values():
-                if v is not None:
-                    all_pcts.append(v)
-        start_pcts = []
-        end_pcts = []
-        if input_dates:
-            first_rd = per_day.get(report_day_first)
-            last_rd = per_day.get(report_day_last)
-            if first_rd:
-                start_pcts = [v for v in first_rd.pct_by_model.values() if v is not None]
-            if last_rd:
-                end_pcts = [v for v in last_rd.pct_by_model.values() if v is not None]
-        start_med = safe_median(start_pcts)
-        end_med = safe_median(end_pcts)
-        tlabel, delta = trend_label(start_med, end_med, main_dirs)
+        week_score = signal_score_from_main_dirs(main_dirs, label_inc="增持", label_dec="减持")
+        early_score = signal_score_from_main_dirs(main_dirs[:k_half], label_inc="增持", label_dec="减持") if k_half else None
+        late_score = signal_score_from_main_dirs(main_dirs[-k_half:], label_inc="增持", label_dec="减持") if k_half else None
+        action = signal_action(week_score, is_category=False)
+        strength = signal_strength(week_score)
+        s_trend = signal_trend(early_score, late_score, is_category=False)
         remark_parts = []
         if missing_in_inputs:
             remark_parts.append(f"该行在纳入日报中缺失 {missing_in_inputs} 天")
@@ -607,40 +661,58 @@ def compute_weekly(
             remark_parts.append("周初数据缺失")
         if input_dates and per_day.get(report_day_last) is None:
             remark_parts.append("周末数据缺失")
-        if input_dates and per_day.get(report_day_first) and start_med is None:
-            remark_parts.append("周初该行建议%全缺失")
-        if input_dates and per_day.get(report_day_last) and end_med is None:
-            remark_parts.append("周末该行建议%全缺失")
         remark = "；".join(remark_parts) if remark_parts else ""
  
         row = [
             it,
             direction_week_counts(main_dirs, label_inc="增持", label_dec="减持"),
-            pct_range(all_pcts),
-            format_pct(start_med) if start_med is not None else "—",
-            format_pct(end_med) if end_med is not None else "—",
-            fmt_delta(delta),
-            tlabel,
+            direction_arrows(main_dirs, label_inc="增持", label_dec="减持"),
+            action,
+            strength,
+            s_trend,
             remark or "—",
         ]
         item_rows.append(row)
-        item_weekly_metrics[it] = {"delta": delta, "range": pct_range(all_pcts), "dirs": direction_week_counts(main_dirs, label_inc="增持", label_dec="减持")}
+        item_signal_metrics[it] = {
+            "dirs": direction_week_counts(main_dirs, label_inc="增持", label_dec="减持"),
+            "action": action,
+            "strength": strength,
+            "strength_value": abs(week_score) if week_score is not None else None,
+            "trend": s_trend,
+            "trend_value": signal_trend_metric(early_score, late_score, is_category=False),
+        }
  
-    focus_candidates: List[Tuple[str, float, str, str]] = []
-    for name, met in cat_weekly_metrics.items():
-        if met["delta"] is None:
-            continue
-        focus_candidates.append((name, float(met["delta"]), str(met["range"]), str(met["dirs"])))
-    for name, met in item_weekly_metrics.items():
-        if met["delta"] is None:
-            continue
-        focus_candidates.append((name, float(met["delta"]), str(met["range"]), str(met["dirs"])))
- 
-    focus_big = sorted(focus_candidates, key=lambda x: abs(x[1]), reverse=True)[:10]
-    focus_stable = sorted(focus_candidates, key=lambda x: abs(x[1]))[:10]
- 
-    def _focus_rows(xs: List[Tuple[str, float, str, str]]) -> List[List[str]]:
-        return [[n, fmt_delta(d), r, ds] for n, d, r, ds in xs]
+    focus_candidates: List[Tuple[str, str, str, str, str, Optional[float], Optional[float]]] = []
+    for name, met in cat_signal_metrics.items():
+        focus_candidates.append(
+            (
+                name,
+                str(met["dirs"]),
+                str(met["action"]),
+                str(met["strength"]),
+                str(met["trend"]),
+                met.get("strength_value") if isinstance(met.get("strength_value"), float) else None,
+                met.get("trend_value") if isinstance(met.get("trend_value"), float) else None,
+            )
+        )
+    for name, met in item_signal_metrics.items():
+        focus_candidates.append(
+            (
+                name,
+                str(met["dirs"]),
+                str(met["action"]),
+                str(met["strength"]),
+                str(met["trend"]),
+                met.get("strength_value") if isinstance(met.get("strength_value"), float) else None,
+                met.get("trend_value") if isinstance(met.get("trend_value"), float) else None,
+            )
+        )
+
+    focus_strong = sorted(focus_candidates, key=lambda x: (x[5] is None, -(x[5] or 0.0), x[0]))[:10]
+    focus_change = sorted(focus_candidates, key=lambda x: (x[6] is None, -(x[6] or 0.0), x[0]))[:10]
+
+    def _focus_rows(xs: List[Tuple[str, str, str, str, str, Optional[float], Optional[float]]]) -> List[List[str]]:
+        return [[n, ds, act, stg, tr] for n, ds, act, stg, tr, _, _ in xs]
  
     theme_groups: List[List[ThemeCell]] = []
     for cell in theme_cells:
@@ -746,7 +818,15 @@ def compute_weekly(
     md_parts.append("## 1. 大板块比例调整建议（周内趋势）")
     md_parts.append(
         md_table(
-            ["大板块", "周内方向统计（按天）", "周内建议%范围", "周初中位数%", "周末中位数%", "周初→周末变化", "趋势", "备注"],
+            [
+                "大板块",
+                "周内方向统计（按天）",
+                "方向序列(↑↓-)",
+                "本周动作建议（信号汇总）",
+                "信号强度（全周）",
+                "信号变化",
+                "备注",
+            ],
             cat_rows,
         )
     )
@@ -755,21 +835,39 @@ def compute_weekly(
     md_parts.append("## 2. 定投计划逐项建议（周内趋势）")
     md_parts.append(
         md_table(
-            ["标的", "周内方向统计（按天）", "周内建议%范围", "周初中位数%", "周末中位数%", "周初→周末变化", "趋势", "备注"],
+            [
+                "标的",
+                "周内方向统计（按天）",
+                "方向序列(↑↓-)",
+                "本周动作建议（信号汇总）",
+                "信号强度（全周）",
+                "信号变化",
+                "备注",
+            ],
             item_rows,
         )
     )
     md_parts.append("")
  
-    md_parts.append("### 变化聚焦")
+    md_parts.append("### 信号聚焦")
     md_parts.append("")
-    md_parts.append("#### 变化最大 TOP10")
+    md_parts.append("#### 信号最强 TOP10")
     md_parts.append("")
-    md_parts.append(md_table(["标的/大板块", "周初→周末变化", "周内建议%范围", "周内方向统计（按天）"], _focus_rows(focus_big)))
+    md_parts.append(
+        md_table(
+            ["标的/大板块", "周内方向统计（按天）", "本周动作建议（信号汇总）", "信号强度（全周）", "信号变化"],
+            _focus_rows(focus_strong),
+        )
+    )
     md_parts.append("")
-    md_parts.append("#### 最稳定 TOP10")
+    md_parts.append("#### 信号变化最大 TOP10")
     md_parts.append("")
-    md_parts.append(md_table(["标的/大板块", "周初→周末变化", "周内建议%范围", "周内方向统计（按天）"], _focus_rows(focus_stable)))
+    md_parts.append(
+        md_table(
+            ["标的/大板块", "周内方向统计（按天）", "本周动作建议（信号汇总）", "信号强度（全周）", "信号变化"],
+            _focus_rows(focus_change),
+        )
+    )
     md_parts.append("")
  
     md_parts.append("## 3. 新的定投方向建议（周内趋势）")
@@ -799,12 +897,56 @@ def latest_n_days_range(n: int = 7) -> Tuple[date, date]:
     return start, end
  
  
+REPORT_RE_TO = re.compile(r"^(\d{4}-\d{2}-\d{2})_to_(\d{4}-\d{2}-\d{2})_每周投资总结\.md$")
+REPORT_RE_TILDE = re.compile(r"^(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2})_每周投资总结\.md$")
+
+
+def _parse_report_range(name: str) -> Optional[Tuple[date, date]]:
+    m = REPORT_RE_TO.match(name) or REPORT_RE_TILDE.match(name)
+    if not m:
+        return None
+    start_s, end_s = m.group(1), m.group(2)
+    try:
+        return (
+            datetime.strptime(start_s, "%Y-%m-%d").date(),
+            datetime.strptime(end_s, "%Y-%m-%d").date(),
+        )
+    except ValueError:
+        return None
+
+
+def rewrite_existing_reports(report_dir: Path) -> Tuple[int, int]:
+    updated = 0
+    skipped = 0
+    for p in sorted(report_dir.iterdir()):
+        if not p.is_file() or p.suffix.lower() != ".md":
+            continue
+        rng = _parse_report_range(p.name)
+        if rng is None:
+            skipped += 1
+            continue
+        week_start, week_end = rng
+        out_text, _, _, _ = compute_weekly(week_start, week_end)
+        p.write_text(out_text, encoding="utf-8")
+        updated += 1
+    return updated, skipped
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--week-start", type=str, default="")
     parser.add_argument("--week-end", type=str, default="")
+    parser.add_argument("--rewrite-existing-reports", action="store_true")
+    parser.add_argument("--report-dir", type=str, default=str(OUTPUT_DIR))
     args = parser.parse_args()
  
+    if args.rewrite_existing_reports:
+        report_dir = Path(args.report_dir)
+        updated, skipped = rewrite_existing_reports(report_dir)
+        print(f"updated={updated}")
+        print(f"skipped={skipped}")
+        return 0
+
     if args.week_start and args.week_end:
         week_start = datetime.strptime(args.week_start, "%Y-%m-%d").date()
         week_end = datetime.strptime(args.week_end, "%Y-%m-%d").date()

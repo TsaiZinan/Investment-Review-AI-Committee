@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 
 # Configuration
-ROOT = Path.cwd()
+ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATE = date.today().isoformat()
 OUTPUT_DIR = ROOT / '每日最终报告'
 
@@ -181,7 +181,100 @@ def direction_to_stat(direction: Optional[str], *, is_category: bool) -> Optiona
 
 def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCandidate]]:
     table, _ = find_table_after_heading(text, '大板块比例调整建议')
-    if not table or len(table) < 2: return [], {}
+    if not table or len(table) < 2:
+        lines = text.splitlines()
+        tables: List[List[List[str]]] = []
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith('|'):
+                i += 1
+                continue
+            table_lines = []
+            while i < len(lines) and lines[i].strip().startswith('|'):
+                table_lines.append(lines[i])
+                i += 1
+            parsed = parse_markdown_table(table_lines)
+            if parsed:
+                tables.append(parsed)
+
+        order: List[str] = []
+        out: Dict[str, CellCandidate] = {}
+        amounts_after: Dict[str, float] = {}
+        directions: Dict[str, str] = {}
+
+        def try_parse_kimi_summary(t: List[List[str]]) -> None:
+            nonlocal order, out, amounts_after, directions
+            if not t or len(t) < 2:
+                return
+            header = t[0]
+            body = t[1:]
+            if body and is_separator_row(body[0]):
+                body = body[1:]
+
+            key_col = find_col(header, ['大类'])
+            if key_col is None:
+                key_col = find_col(header, ['大板块'])
+            before_col = find_col(header, ['调整前', '周定投'])
+            after_col = find_col(header, ['调整后', '周定投'])
+            if after_col is None:
+                after_col = find_col(header, ['调整后'])
+
+            if key_col is None or before_col is None or after_col is None:
+                return
+
+            for row in body:
+                if len(row) <= max(key_col, before_col, after_col):
+                    continue
+                key = row[key_col].strip()
+                key_plain = re.sub(r'[*_`\\s]+', '', key)
+                if not key_plain or key_plain in ('合计', '总计'):
+                    continue
+                key = key_plain
+                before_amt = parse_float_from_text(row[before_col])
+                after_amt = parse_float_from_text(row[after_col])
+                if after_amt is None:
+                    continue
+
+                if before_amt is None:
+                    direction = None
+                else:
+                    delta = after_amt - before_amt
+                    if abs(delta) < 1e-9:
+                        direction = '不变'
+                    elif delta > 0:
+                        direction = '增配'
+                    else:
+                        direction = '减配'
+
+                if key not in out:
+                    order.append(key)
+                amounts_after[key] = after_amt
+                if direction:
+                    directions[key] = direction
+                out[key] = CellCandidate(
+                    display='—',
+                    pct=None,
+                    direction_raw=direction,
+                    direction_stat=direction_to_stat(direction, is_category=True) if direction else None,
+                    raw_model=raw_model
+                )
+
+        for t in tables:
+            try_parse_kimi_summary(t)
+
+        if amounts_after:
+            total = sum(amounts_after.values())
+            if total > 0:
+                for key, amt in amounts_after.items():
+                    cand = out.get(key)
+                    if not cand:
+                        continue
+                    pct = (amt / total) * 100.0
+                    cand.pct = pct
+                    dir_disp = cand.direction_raw if cand.direction_raw else '—'
+                    cand.display = f'{format_pct(pct)}（{dir_disp}）'
+            return order, out
+        return [], {}
 
     header = table[0]
     body = table[1:]
@@ -191,7 +284,69 @@ def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, Ce
     pct_col = find_col(header, ['建议%'])
     dir_col = find_col(header, ['建议'], excludes=['建议%'])
 
-    if key_col is None or pct_col is None or dir_col is None: return [], {}
+    if key_col is None or pct_col is None or dir_col is None:
+        key_col2 = find_col(header, ['大类'])
+        if key_col2 is None:
+            key_col2 = key_col
+
+        before_col2 = find_col(header, ['当前目标'])
+        if before_col2 is None:
+            before_col2 = find_col(header, ['当前'])
+
+        after_col2 = find_col(header, ['调整后'])
+        adjust_col2 = find_col(header, ['建议调整'])
+
+        if key_col2 is None or after_col2 is None:
+            return [], {}
+
+        order2: List[str] = []
+        out2: Dict[str, CellCandidate] = {}
+        for row in body:
+            if len(row) <= max(key_col2, after_col2):
+                continue
+            key = row[key_col2].strip()
+            key_plain = re.sub(r'[*_`\\s]+', '', key)
+            if not key_plain or key_plain in ('合计', '总计'):
+                continue
+            key = key_plain
+
+            before_pct = parse_float_from_text(row[before_col2]) if (before_col2 is not None and len(row) > before_col2) else None
+            after_pct = parse_float_from_text(row[after_col2])
+            if after_pct is None:
+                continue
+
+            direction = None
+            if adjust_col2 is not None and len(row) > adjust_col2:
+                adjust_text = (row[adjust_col2] or '').strip()
+                if '↑' in adjust_text:
+                    direction = '增配'
+                elif '↓' in adjust_text:
+                    direction = '减配'
+                elif '→' in adjust_text:
+                    direction = '不变'
+
+            if direction is None and before_pct is not None:
+                delta = after_pct - before_pct
+                if abs(delta) < 1e-9:
+                    direction = '不变'
+                elif delta > 0:
+                    direction = '增配'
+                else:
+                    direction = '减配'
+
+            pct_disp = format_pct(after_pct)
+            dir_disp = direction if direction else '—'
+            display = f'{pct_disp}（{dir_disp}）'
+
+            order2.append(key)
+            out2[key] = CellCandidate(
+                display=display,
+                pct=after_pct,
+                direction_raw=direction,
+                direction_stat=direction_to_stat(direction, is_category=True) if direction else None,
+                raw_model=raw_model
+            )
+        return order2, out2
 
     order = []
     out = {}
@@ -224,8 +379,237 @@ def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, Ce
     return order, out
 
 def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCandidate]]:
+    def scan_tables_all() -> Tuple[List[str], Dict[str, CellCandidate]]:
+        lines = text.splitlines()
+        tables: List[List[List[str]]] = []
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith('|'):
+                i += 1
+                continue
+            table_lines = []
+            while i < len(lines) and lines[i].strip().startswith('|'):
+                table_lines.append(lines[i])
+                i += 1
+            parsed = parse_markdown_table(table_lines)
+            if parsed:
+                tables.append(parsed)
+
+        merged_order: List[str] = []
+        merged_items: Dict[str, CellCandidate] = {}
+        merged_amounts: Dict[str, float] = {}
+
+        def upsert_item(key: str, cand: CellCandidate, *, amount_value: Optional[float]) -> None:
+            nonlocal merged_order, merged_items, merged_amounts
+            if not key:
+                return
+            if not normalize_item_name(key):
+                return
+            existing = merged_items.get(key)
+            if existing:
+                if existing.pct is None and cand.pct is not None:
+                    merged_items[key] = cand
+                    if amount_value is not None:
+                        merged_amounts[key] = amount_value
+                return
+            merged_order.append(key)
+            merged_items[key] = cand
+            if amount_value is not None:
+                merged_amounts[key] = amount_value
+
+        def has_word(h: str, w: str) -> bool:
+            return w in (h or '').strip()
+
+        def try_parse_table(t: List[List[str]]) -> None:
+            if not t or len(t) < 2:
+                return
+            header = t[0]
+            body = t[1:]
+            if body and is_separator_row(body[0]):
+                body = body[1:]
+            if not body:
+                return
+
+            key_col = find_col(header, ['标的'])
+            if key_col is None:
+                key_col = find_col(header, ['基金'])
+            if key_col is None:
+                return
+
+            current_pct_col = find_col(header, ['当前占比'])
+            if current_pct_col is None:
+                current_pct_col = find_col(header, ['当前', '占比'])
+            if current_pct_col is None:
+                current_pct_col = find_col(header, ['当前比例'])
+            adjust_col = find_col(header, ['建议调整'])
+            if adjust_col is None:
+                adjust_col = find_col(header, ['建议', '调整'])
+
+            if current_pct_col is not None and adjust_col is not None:
+                for row in body:
+                    if len(row) <= max(key_col, current_pct_col, adjust_col):
+                        continue
+                    key = row[key_col].strip()
+                    cur = parse_float_from_text(row[current_pct_col])
+                    delta = parse_float_from_text(row[adjust_col])
+                    if cur is None or delta is None:
+                        continue
+
+                    to_pct = cur + delta
+                    if abs(delta) < 1e-9:
+                        direction = '维持'
+                    elif delta > 0:
+                        direction = '增持'
+                    else:
+                        direction = '减持'
+                    dir_disp = direction if direction else '—'
+                    display = f'{format_pct(to_pct)}（{dir_disp}）'
+                    upsert_item(
+                        key,
+                        CellCandidate(
+                            display=display,
+                            pct=to_pct,
+                            direction_raw=direction,
+                            direction_stat=direction_to_stat(direction, is_category=False) if direction else None,
+                            raw_model=raw_model,
+                        ),
+                        amount_value=None,
+                    )
+                return
+
+            current_col = find_col(header, ['当前周定投'])
+            if current_col is None:
+                current_col = find_col(header, ['当前', '定投'])
+            if current_col is None:
+                current_col = find_col(header, ['当前金额'])
+
+            after_col = find_col(header, ['调整后', '周定投'])
+            if after_col is None:
+                after_col = find_col(header, ['调整后'])
+
+            value_col = find_col(header, ['建议金额'])
+            if value_col is None:
+                value_col = find_col(header, ['建议周定投'])
+            if value_col is None:
+                value_col = find_col(header, ['建议定投额'])
+            if value_col is None:
+                value_col = find_col(header, ['建议', '定投'])
+            if value_col is None:
+                value_col = find_col(header, ['定投金额'])
+            if value_col is None:
+                value_col = find_col(header, ['定投额'])
+            if value_col is None:
+                value_col = find_col(header, ['建议调整'])
+            if value_col is None:
+                value_col = find_col(header, ['建议', '调整'])
+
+            if value_col is not None and after_col is not None:
+                value_header_probe = (header[value_col] or '').strip()
+                if '建议调整' in value_header_probe:
+                    value_col = after_col
+
+            direction_only_col = None
+            if value_col is None:
+                direction_only_col = find_col(header, ['建议'], excludes=['建议%', '建议金额', '建议调整'])
+                if direction_only_col is None and find_col(header, ['当前状态']) is not None:
+                    direction_only_col = find_col(header, ['建议'])
+
+            if value_col is None and direction_only_col is None:
+                return
+
+            value_header = (header[value_col] or '').strip() if value_col is not None else ''
+            is_percent = ('%' in value_header) or ('比例' in value_header)
+
+            for row in body:
+                if len(row) <= key_col:
+                    continue
+                key = row[key_col].strip()
+
+                if direction_only_col is not None:
+                    if len(row) <= direction_only_col:
+                        continue
+                    direction_raw = row[direction_only_col].strip() or None
+                    if not direction_raw:
+                        continue
+                    display = f'—（{direction_raw}）'
+                    upsert_item(
+                        key,
+                        CellCandidate(
+                            display=display,
+                            pct=None,
+                            direction_raw=direction_raw,
+                            direction_stat=direction_to_stat(direction_raw, is_category=False),
+                            raw_model=raw_model,
+                        ),
+                        amount_value=None,
+                    )
+                    continue
+
+                if len(row) <= value_col:
+                    continue
+                value = parse_float_from_text(row[value_col])
+                if value is None:
+                    continue
+
+                direction = None
+                current_value = None
+                if current_col is not None and len(row) > current_col:
+                    current_header = (header[current_col] or '').strip()
+                    if has_word(current_header, '定投') or has_word(current_header, '周'):
+                        current_value = parse_float_from_text(row[current_col])
+                if current_value is not None:
+                    if abs(value - current_value) < 1e-9:
+                        direction = '维持'
+                    elif value > current_value:
+                        direction = '增持'
+                    else:
+                        direction = '减持'
+
+                if is_percent:
+                    value_disp = format_pct(value)
+                    amount_value = None
+                    pct_value = value
+                else:
+                    value_disp = f'{value:g}'
+                    amount_value = value
+                    pct_value = None
+                dir_disp = direction if direction else '—'
+                display = f'{value_disp}（{dir_disp}）'
+
+                upsert_item(
+                    key,
+                    CellCandidate(
+                        display=display,
+                        pct=pct_value,
+                        direction_raw=direction,
+                        direction_stat=direction_to_stat(direction, is_category=False) if direction else None,
+                        raw_model=raw_model,
+                    ),
+                    amount_value=amount_value,
+                )
+
+        for t in tables:
+            try_parse_table(t)
+
+        if merged_amounts:
+            total = sum(merged_amounts.values())
+            if total > 0:
+                for k, amt in merged_amounts.items():
+                    cand = merged_items.get(k)
+                    if not cand:
+                        continue
+                    pct = (amt / total) * 100.0
+                    cand.pct = pct
+                    dir_disp = cand.direction_raw if cand.direction_raw else '—'
+                    cand.display = f'{format_pct(pct)}（{dir_disp}）'
+
+        if merged_items:
+            return merged_order, merged_items
+        return [], {}
+
     table, _ = find_table_after_heading(text, '定投计划逐项建议')
-    if not table or len(table) < 2: return [], {}
+    if not table or len(table) < 2:
+        return scan_tables_all()
 
     header = table[0]
     body = table[1:]
@@ -233,38 +617,65 @@ def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCan
 
     key_col = find_col(header, ['标的'])
     pct_col = find_col(header, ['建议%'])
-    dir_col = find_col(header, ['建议'], excludes=['建议%'])
+    amt_col = find_col(header, ['建议金额'])
+    dir_col = find_col(header, ['建议'], excludes=['建议%', '建议金额'])
 
-    if key_col is None or pct_col is None or dir_col is None: return [], {}
+    if key_col is None or dir_col is None:
+        return scan_tables_all()
+
+    value_col = pct_col if pct_col is not None else amt_col
+    if value_col is None:
+        return scan_tables_all()
+    is_percent = (pct_col is not None)
 
     order = []
     out = {}
+    amounts = {}
     for row in body:
-        if len(row) <= max(key_col, pct_col, dir_col): continue
+        if len(row) <= max(key_col, value_col, dir_col): continue
         key = row[key_col].strip()
+        if not normalize_item_name(key):
+            continue
         if not key: continue
         
-        pct = parse_float_from_text(row[pct_col])
+        value = parse_float_from_text(row[value_col])
         direction = row[dir_col].strip() or None
         
-        pct_disp = format_pct(pct) if pct is not None else '—'
+        if is_percent:
+            value_disp = format_pct(value) if value is not None else '—'
+        else:
+            value_disp = f'{value:g}' if value is not None else '—'
         dir_disp = direction if direction else '—'
         
-        if pct is None and not direction:
+        if value is None and not direction:
             display = '—'
-        elif pct is not None:
-            display = f'{pct_disp}（{dir_disp}）'
+        elif value is not None:
+            display = f'{value_disp}（{dir_disp}）'
         else:
             display = f'—（{dir_disp}）'
 
         order.append(key)
         out[key] = CellCandidate(
             display=display,
-            pct=pct,
+            pct=value if is_percent else None,
             direction_raw=direction,
             direction_stat=direction_to_stat(direction, is_category=False),
             raw_model=raw_model
         )
+        if (not is_percent) and (value is not None):
+            amounts[key] = value
+
+    if (not is_percent) and amounts:
+        total = sum(amounts.values())
+        if total > 0:
+            for k, amt in amounts.items():
+                cand = out.get(k)
+                if not cand:
+                    continue
+                pct = (amt / total) * 100.0
+                cand.pct = pct
+                dir_disp = cand.direction_raw if cand.direction_raw else '—'
+                cand.display = f'{format_pct(pct)}（{dir_disp}）'
     return order, out
 
 def normalize_topic_name(s: str) -> str:
@@ -291,8 +702,12 @@ def normalize_item_name(s: str) -> str:
         return ''
     t = unicodedata.normalize('NFKC', s)
     t = t.strip().lower()
+    if re.fullmatch(r'[\-—–—]+', t):
+        return ''
     t = t.replace('（', '(').replace('）', ')')
     t = re.sub(r'\s+', '', t)
+    if re.fullmatch(r'[\-—–—]+', t):
+        return ''
     t = re.sub(r'(?<!\d)\d{6}(?!\d)', '', t)
     t = t.replace('创新药产业', '创新药')
     t = t.replace('人民币', '')
@@ -304,7 +719,8 @@ def normalize_item_name(s: str) -> str:
     t = t.replace('发起式', '').replace('发起', '')
     t = re.sub(r'[\[\]{}<>《》“”"\'`]', '', t)
     t = t.replace('(', '').replace(')', '')
-    t = re.sub(r'^华安黄金etf联接[abc]?$', '华安黄金', t)
+    t = re.sub(r'^华安黄金(?:易)?etf联接[abc]?$', '华安黄金', t)
+    t = re.sub(r'^华安黄金(?:易)?etf$', '华安黄金', t)
     return t
 
 def item_tokens(norm: str) -> List[str]:
@@ -381,6 +797,39 @@ def load_strategy_investment_plan_items(date_str: str) -> Tuple[Optional[Path], 
         cleaned.append({'fund_name': name, 'fund_code': code})
     return strategy_path, cleaned
 
+def map_report_item_to_source_name(
+    item: str,
+    *,
+    source_names: List[str],
+    source_names_set: Set[str],
+    source_norm_to_names: Dict[str, List[str]],
+) -> Optional[str]:
+    if not item:
+        return None
+    if item in source_names_set:
+        return item
+    norm = normalize_item_name(item)
+    if not norm:
+        return None
+
+    candidates: List[str] = []
+    for v in item_norm_variants(norm):
+        candidates.extend(source_norm_to_names.get(v, []))
+    if candidates:
+        return sorted(set(candidates), key=lambda x: (len(x), x))[0]
+
+    best_match = None
+    best_score = 0.0
+    for src in source_names:
+        src_norm = normalize_item_name(src)
+        score = jaccard_bigrams(norm, src_norm)
+        if score > best_score:
+            best_score = score
+            best_match = src
+    if best_match and best_score >= 0.55:
+        return best_match
+    return None
+
 @dataclass
 class ItemValidationIssue:
     file_name: str
@@ -418,6 +867,8 @@ def validate_report_items_against_strategy(date_str: str, files: List[Tuple[Path
         extra_items: List[str] = []
 
         for item in report_items:
+            if not normalize_item_name(item):
+                continue
             if item in source_names_set:
                 matched_source.add(item)
                 continue
@@ -451,21 +902,14 @@ def validate_report_items_against_strategy(date_str: str, files: List[Tuple[Path
 
         missing_items = [nm for nm in source_names if nm not in matched_source and nm not in report_items_set]
 
-        if extra_items or missing_items:
+        if missing_items:
             any_fatal_issue = True
+        if extra_items or missing_items or mapped_name_mismatches:
             issues.append(ItemValidationIssue(
                 file_name=path.name,
                 raw_model=raw_model,
                 extra_items=sorted(extra_items),
                 missing_items=missing_items,
-                mapped_name_mismatches=sorted(mapped_name_mismatches, key=lambda x: (x[1], x[0])),
-            ))
-        elif mapped_name_mismatches:
-            issues.append(ItemValidationIssue(
-                file_name=path.name,
-                raw_model=raw_model,
-                extra_items=[],
-                missing_items=[],
                 mapped_name_mismatches=sorted(mapped_name_mismatches, key=lambda x: (x[1], x[0])),
             ))
 
@@ -872,7 +1316,7 @@ def render_table(headers: List[str], rows: List[List[str]]) -> str:
 
 def _run_git(args: List[str]) -> Tuple[int, str, str]:
     p = subprocess.run(
-        ['git'] + args,
+        ['git', '-c', 'core.quotepath=false'] + args,
         cwd=str(ROOT),
         text=True,
         capture_output=True,
@@ -974,9 +1418,19 @@ def main(date_str: str, *, force: bool, validate_only: bool, publish: bool, publ
         print(f"No files matching pattern in {input_dir}")
         return 1
 
+    _, plan_items = load_strategy_investment_plan_items(date_str)
+    source_names = [x.get('fund_name', '').strip() for x in plan_items if isinstance(x, dict) and x.get('fund_name')]
+    source_names = [x for x in source_names if x]
+    source_names_set = set(source_names)
+    source_norm_to_names: Dict[str, List[str]] = {}
+    for nm in source_names:
+        n = normalize_item_name(nm)
+        for v in item_norm_variants(n):
+            source_norm_to_names.setdefault(v, []).append(nm)
+
     ok, issues, source_hint = validate_report_items_against_strategy(date_str, files)
-    fatal_issues = [it for it in issues if it.extra_items or it.missing_items]
-    warn_issues = [it for it in issues if (not it.extra_items and not it.missing_items and it.mapped_name_mismatches)]
+    fatal_issues = [it for it in issues if it.missing_items]
+    warn_issues = [it for it in issues if (not it.missing_items and (it.extra_items or it.mapped_name_mismatches))]
 
     if fatal_issues:
         print('标的校验：发现与数据源不一致')
@@ -998,12 +1452,15 @@ def main(date_str: str, *, force: bool, validate_only: bool, publish: bool, publ
             return 2
         print('已启用 --force，将继续生成每日最终报告。')
     elif warn_issues:
-        print('标的校验：通过（存在名称不一致但已匹配）')
+        print('标的校验：通过（存在报告多出标的或名称不一致但已匹配；生成时将忽略多出标的）')
         print(source_hint)
         for it in warn_issues:
             print(f'- {it.file_name}（{it.raw_model}）')
-            pairs = [f'{a} -> {b}' for a, b in it.mapped_name_mismatches]
-            print('  - 名称不一致但已匹配：' + ' / '.join(pairs))
+            if it.extra_items:
+                print('  - 报告多出标的（将忽略）：' + ' / '.join(it.extra_items))
+            if it.mapped_name_mismatches:
+                pairs = [f'{a} -> {b}' for a, b in it.mapped_name_mismatches]
+                print('  - 名称不一致但已匹配：' + ' / '.join(pairs))
         if validate_only:
             return 0
     else:
@@ -1018,6 +1475,23 @@ def main(date_str: str, *, force: bool, validate_only: bool, publish: bool, publ
         canon = canonicalize_model(raw_model)
         cat_order, cats = parse_categories(text, raw_model)
         item_order, items = parse_items(text, raw_model)
+        if source_names:
+            filtered: Dict[str, CellCandidate] = {}
+            for k, cand in items.items():
+                mapped = map_report_item_to_source_name(
+                    k,
+                    source_names=source_names,
+                    source_names_set=source_names_set,
+                    source_norm_to_names=source_norm_to_names,
+                )
+                if not mapped:
+                    continue
+                if mapped in filtered:
+                    filtered[mapped] = select_best_candidate([filtered[mapped], cand]) or filtered[mapped]
+                else:
+                    filtered[mapped] = cand
+            items = filtered
+            item_order = [nm for nm in source_names if nm in items]
         top_changes = parse_top_changes(text, raw_model, canon)
         themes, no_new = parse_themes(text, raw_model)
         
@@ -1043,7 +1517,7 @@ def main(date_str: str, *, force: bool, validate_only: bool, publish: bool, publ
     
     # Stability ordering maps
     cat_seen_order = {}
-    item_seen_order = {}
+    item_seen_order = {nm: i for i, nm in enumerate(source_names)} if source_names else {}
     
     for m in parsed_models:
         for k in m.categories: all_cats.add(k)
