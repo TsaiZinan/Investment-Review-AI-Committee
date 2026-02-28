@@ -16,23 +16,7 @@ FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_最终投资总结\.md$")
  
  
 def canonicalize_model(raw_model: str) -> str:
-    s = raw_model.strip()
-    low = s.lower()
-    if low.startswith("gemini"):
-        return "Gemini"
-    if low.startswith("kimi"):
-        return "Kimi"
-    if low.startswith("minimax"):
-        return "MiniMax-M2.1"
-    if low.startswith("traeai"):
-        return "TraeAI"
-    if low.startswith("deepseek"):
-        return "DeepSeek"
-    if low.startswith("grok"):
-        return "Grok-4"
-    if low.startswith("glm"):
-        return "GLM-4.7"
-    return s
+    return (raw_model or "").strip()
  
  
 def parse_float_from_text(s: str) -> Optional[float]:
@@ -174,11 +158,14 @@ def _choose_cell(candidates: List[Tuple[str, str]]) -> str:
  
 def dedupe_models(header: List[str], model_indices: List[int]) -> Tuple[List[str], Dict[str, List[int]]]:
     canonical_to_indices: Dict[str, List[int]] = {}
+    ordered_models: List[str] = []
     for idx in model_indices:
         raw = header[idx].strip()
         can = canonicalize_model(raw)
         canonical_to_indices.setdefault(can, []).append(idx)
-    models = sorted(canonical_to_indices.keys())
+        if can not in ordered_models:
+            ordered_models.append(can)
+    models = ordered_models
     return models, canonical_to_indices
  
  

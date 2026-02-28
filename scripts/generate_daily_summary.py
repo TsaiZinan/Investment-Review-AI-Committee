@@ -14,16 +14,16 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATE = date.today().isoformat()
 OUTPUT_DIR = ROOT / '每日最终报告'
 
-# Model Order
-MODEL_ORDER_FIXED = [
-    'DeepSeek',
-    'Gemini',
-    'GPT-5.2',
-    'Grok-4',
-    'GLM-4.7',
-    'Kimi',
-    'MiniMax-M2.1',
-    'TraeAI',
+MODEL_PREFIX_ORDER = [
+    'deepseek',
+    'gemini',
+    'gpt',
+    'grok',
+    'glm',
+    'kimi',
+    'minimax',
+    'traeai',
+    'qwen',
 ]
 
 CATEGORY_ORDER_FIXED = ['债券', '中股', '期货', '美股']
@@ -31,16 +31,15 @@ CATEGORY_ORDER_FIXED = ['债券', '中股', '期货', '美股']
 # --- Helper Functions ---
 
 def canonicalize_model(raw_model: str) -> str:
-    s = raw_model.strip()
+    return (raw_model or '').strip()
+
+def model_sort_key(model: str) -> Tuple[int, int, str]:
+    s = (model or '').strip()
     low = s.lower()
-    if low.startswith('gemini'): return 'Gemini'
-    if low.startswith('kimi'): return 'Kimi'
-    if low.startswith('minimax'): return 'MiniMax-M2.1'
-    if low.startswith('traeai'): return 'TraeAI'
-    if low.startswith('deepseek'): return 'DeepSeek'
-    if low.startswith('grok'): return 'Grok-4'
-    if low.startswith('glm'): return 'GLM-4.7'
-    return s
+    for i, prefix in enumerate(MODEL_PREFIX_ORDER):
+        if low.startswith(prefix):
+            return (0, i, s)
+    return (1, len(MODEL_PREFIX_ORDER), s)
 
 def format_pct(x: float) -> str:
     return f'{x:.2f}%'
@@ -508,6 +507,17 @@ def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCan
                 if '建议调整' in value_header_probe:
                     value_col = after_col
 
+            explicit_direction_col = None
+            for i, h in enumerate(header):
+                hh = (h or '').strip()
+                if not hh or '建议' not in hh:
+                    continue
+                if any(x in hh for x in ['增持', '减持', '不变', '维持', '暂停', '停止', '增配', '减配']):
+                    if any(x in hh for x in ['建议%', '金额', '周定投', '定投', '调整']):
+                        continue
+                    explicit_direction_col = i
+                    break
+
             direction_only_col = None
             if value_col is None:
                 direction_only_col = find_col(header, ['建议'], excludes=['建议%', '建议金额', '建议调整'])
@@ -549,15 +559,34 @@ def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCan
                     continue
                 value = parse_float_from_text(row[value_col])
                 if value is None:
+                    if explicit_direction_col is not None and len(row) > explicit_direction_col:
+                        direction_raw = row[explicit_direction_col].strip() or None
+                        if direction_raw:
+                            display = f'—（{direction_raw}）'
+                            upsert_item(
+                                key,
+                                CellCandidate(
+                                    display=display,
+                                    pct=None,
+                                    direction_raw=direction_raw,
+                                    direction_stat=direction_to_stat(direction_raw, is_category=False),
+                                    raw_model=raw_model,
+                                ),
+                                amount_value=None,
+                            )
                     continue
 
-                direction = None
+                direction_from_col = None
+                if explicit_direction_col is not None and len(row) > explicit_direction_col:
+                    direction_from_col = row[explicit_direction_col].strip() or None
+
+                direction = direction_from_col
                 current_value = None
                 if current_col is not None and len(row) > current_col:
                     current_header = (header[current_col] or '').strip()
                     if has_word(current_header, '定投') or has_word(current_header, '周'):
                         current_value = parse_float_from_text(row[current_col])
-                if current_value is not None:
+                if direction is None and current_value is not None:
                     if abs(value - current_value) < 1e-9:
                         direction = '维持'
                     elif value > current_value:
@@ -1508,9 +1537,8 @@ def main(date_str: str, *, force: bool, validate_only: bool, publish: bool, publ
         ))
 
     # Identify columns
-    present_canons = sorted({m.canonical_model for m in parsed_models})
-    model_cols = [m for m in MODEL_ORDER_FIXED if m in present_canons] + \
-                 sorted([m for m in present_canons if m not in MODEL_ORDER_FIXED])
+    present_models = sorted({m.canonical_model for m in parsed_models}, key=model_sort_key)
+    model_cols = present_models
                  
     # Aggregate Data
     all_cats = set()
