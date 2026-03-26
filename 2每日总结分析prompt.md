@@ -46,21 +46,15 @@
 
 ### 2) 识别“模型名”与列名（含归一化与去重）
 - 对每个输入文件，从文件名中提取原始 `<模型名>` 作为 `raw_model`。
-- 将 `raw_model` 归一化为 `canonical_model`（用于输出列名与后续统计），规则：
-  - `Gemini*` → `Gemini`
-  - `Kimi*` / `kimi` → `Kimi`
-  - `MiniMax*` → `MiniMax-M2.1`
-  - `TraeAI*` → `TraeAI`
-  - `DeepSeek*` / `deepseek` → `DeepSeek`
-  - `Grok*` / `grok*` → `Grok-4`
-  - `GLM*` → `GLM-4.7`
-  - 其余模型：保持原名
+- 将 `raw_model` 归一化为 `canonical_model`（用于输出列名与后续统计）时，必须优先读取 `Data/model_registry.json`：
+  - 若 `raw_model` 命中注册表中的 `aliases` 或 `canonical_name`，则使用该条目的 `canonical_name`
+  - 若注册表中不存在该模型名，则 `canonical_model = raw_model`
 - 若归一化后同一天出现多个相同 `canonical_model`，你必须将其合并为同一列：
   - 对每个单元格：优先选择非 `—` 的值
   - 若多个值都非 `—`：优先选择文本更长者
   - 若仍无法区分：按 `raw_model` 字典序取更靠后者
 - 输出表格列名使用 `canonical_model`。
-- 模型列顺序：优先按固定顺序输出 `DeepSeek → Gemini → GPT-5.2 → Grok-4 → GLM-4.7 → Kimi → MiniMax-M2.1 → TraeAI`，其余模型按字典序追加。
+- 模型列顺序：优先按 `Data/model_registry.json` 中的 `family.order + model.order` 输出；注册表中不存在的模型按字典序追加。
 
 ### 3) 解析每个输入文件中必须用到的三块信息
 对每个 `*_投资建议.md`：

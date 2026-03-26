@@ -50,14 +50,9 @@
 
 #### 2.1 模型名归一化与去重（必须执行）
 - 你必须将日总结表格里的“模型列名”先归一化为 `canonical_model` 再做任何统计与汇总，规则：
-  - `Gemini*` → `Gemini`
-  - `Kimi*` / `kimi` → `Kimi`
-  - `MiniMax*` → `MiniMax-M2.1`
-  - `TraeAI*` → `TraeAI`
-  - `DeepSeek*` / `deepseek` → `DeepSeek`
-  - `Grok*` / `grok*` → `Grok-4`
-  - `GLM*` → `GLM-4.7`
-  - 其余模型：保持原名
+  - 优先读取 `Data/model_registry.json`
+  - 若列名命中注册表中的 `aliases` 或 `canonical_name`，则使用该条目的 `canonical_name`
+  - 若注册表中不存在该模型名，则保持原名
 - 若同一份日总结里出现多个归一化后相同的 `canonical_model` 列，你必须将其合并为一列：
   - 对每个单元格：优先选择非 `—` 的值
   - 若多个值都非 `—`：优先选择文本更长者

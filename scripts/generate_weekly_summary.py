@@ -6,17 +6,20 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from statistics import median
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+
+from model_registry import canonicalize_model_name, load_registry
  
  
 ROOT = Path(__file__).resolve().parent.parent
 INPUT_DIR = ROOT / "每日最终报告"
 OUTPUT_DIR = ROOT / "每周分析报告"
+MODEL_REGISTRY = load_registry()
  
 FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_最终投资总结\.md$")
  
  
 def canonicalize_model(raw_model: str) -> str:
-    return (raw_model or "").strip()
+    return canonicalize_model_name(raw_model, MODEL_REGISTRY)
  
  
 def parse_float_from_text(s: str) -> Optional[float]:

@@ -9,37 +9,23 @@ from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
 
+from model_registry import build_model_sort_key, canonicalize_model_name, load_registry
+
 # Configuration
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATE = date.today().isoformat()
 OUTPUT_DIR = ROOT / '每日最终报告'
 
-MODEL_PREFIX_ORDER = [
-    'deepseek',
-    'gemini',
-    'gpt',
-    'grok',
-    'glm',
-    'kimi',
-    'minimax',
-    'traeai',
-    'qwen',
-]
-
 CATEGORY_ORDER_FIXED = ['债券', '中股', '期货', '美股']
+MODEL_REGISTRY = load_registry()
 
 # --- Helper Functions ---
 
 def canonicalize_model(raw_model: str) -> str:
-    return (raw_model or '').strip()
+    return canonicalize_model_name(raw_model, MODEL_REGISTRY)
 
 def model_sort_key(model: str) -> Tuple[int, int, str]:
-    s = (model or '').strip()
-    low = s.lower()
-    for i, prefix in enumerate(MODEL_PREFIX_ORDER):
-        if low.startswith(prefix):
-            return (0, i, s)
-    return (1, len(MODEL_PREFIX_ORDER), s)
+    return build_model_sort_key(model, MODEL_REGISTRY)
 
 def format_pct(x: float) -> str:
     return f'{x:.2f}%'
@@ -170,9 +156,13 @@ def direction_to_stat(direction: Optional[str], *, is_category: bool) -> Optiona
         if '小幅减配' in d: return '减'
         if '增配' in d: return '增'
         if '减配' in d: return '减'
+        if any(x in d for x in ['回补', '补仓', '加仓']): return '增'
+        if any(x in d for x in ['超配', '止盈', '收缩', '减额']): return '减'
     else:
         if '增持' in d: return '增'
         if '减持' in d: return '减'
+        if any(x in d for x in ['加倍', '倍增', '翻倍', '倍加']): return '增'
+        if any(x in d for x in ['减半', '腰斩', '减仓', '降低', '微减']): return '减'
 
     if '增' in d: return '增'
     if '减' in d or '暂停' in d or '停止' in d: return '减'
@@ -200,6 +190,7 @@ def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, Ce
         out: Dict[str, CellCandidate] = {}
         amounts_after: Dict[str, float] = {}
         directions: Dict[str, str] = {}
+        parsed_pct_direct = False
 
         def try_parse_kimi_summary(t: List[List[str]]) -> None:
             nonlocal order, out, amounts_after, directions
@@ -258,8 +249,108 @@ def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, Ce
                     raw_model=raw_model
                 )
 
+        def try_parse_asset_allocation_table(t: List[List[str]]) -> None:
+            nonlocal order, out, parsed_pct_direct
+            if not t or len(t) < 2:
+                return
+            header = t[0]
+            body = t[1:]
+            if body and is_separator_row(body[0]):
+                body = body[1:]
+
+            key_col = find_col(header, ['类别'])
+            if key_col is None:
+                key_col = find_col(header, ['大类'])
+
+            pct_col = find_col(header, ['配置比例'])
+            if pct_col is None:
+                pct_col = find_col(header, ['配置', '比例'])
+
+            dir_col = find_col(header, ['调整建议'])
+            if dir_col is None:
+                dir_col = find_col(header, ['调整'], excludes=['调整后', '调整前'])
+
+            if key_col is None or pct_col is None:
+                return
+
+            for row in body:
+                if len(row) <= max(key_col, pct_col):
+                    continue
+                key = (row[key_col] or '').strip()
+                key_plain = re.sub(r'[*_`\\s]+', '', key)
+                if not key_plain or key_plain in ('合计', '总计'):
+                    continue
+                pct = parse_float_from_text(row[pct_col])
+                if pct is None:
+                    continue
+
+                direction = None
+                if dir_col is not None and len(row) > dir_col:
+                    direction = (row[dir_col] or '').strip() or None
+
+                pct_disp = format_pct(pct)
+                dir_disp = direction if direction else '—'
+                display = f'{pct_disp}（{dir_disp}）'
+
+                if key_plain not in out:
+                    order.append(key_plain)
+                out[key_plain] = CellCandidate(
+                    display=display,
+                    pct=pct,
+                    direction_raw=direction,
+                    direction_stat=direction_to_stat(direction, is_category=True) if direction else None,
+                    raw_model=raw_model,
+                )
+                parsed_pct_direct = True
+
+        def try_parse_categories_from_text() -> Tuple[List[str], Dict[str, CellCandidate]]:
+            parsed_order: List[str] = []
+            parsed_out: Dict[str, CellCandidate] = {}
+
+            for ln in lines:
+                if '目标' not in ln or '%' not in ln:
+                    continue
+                for cat in CATEGORY_ORDER_FIXED:
+                    if cat not in ln:
+                        continue
+                    pct = None
+                    m = re.search(r'目标\s*([0-9]+(?:\.[0-9]+)?)\s*%', ln)
+                    if m:
+                        pct = parse_float_from_text(m.group(1))
+                    if pct is None:
+                        continue
+
+                    direction = None
+                    if any(x in ln for x in ['增配', '回补', '补仓', '加仓', '加速']):
+                        direction = '增配'
+                    elif any(x in ln for x in ['减配', '超配', '止盈', '暂停', '减额', '收缩']):
+                        direction = '减配'
+                    elif any(x in ln for x in ['维持', '保持', '正常']):
+                        direction = '不变'
+
+                    pct_disp = format_pct(pct)
+                    dir_disp = direction if direction else '—'
+                    parsed_order.append(cat)
+                    parsed_out[cat] = CellCandidate(
+                        display=f'{pct_disp}（{dir_disp}）',
+                        pct=pct,
+                        direction_raw=direction,
+                        direction_stat=direction_to_stat(direction, is_category=True) if direction else None,
+                        raw_model=raw_model,
+                    )
+                    break
+
+            if parsed_out:
+                fixed_order = [c for c in CATEGORY_ORDER_FIXED if c in parsed_out]
+                for k in parsed_order:
+                    if k not in fixed_order and k in parsed_out:
+                        fixed_order.append(k)
+                return fixed_order, parsed_out
+            return [], {}
+
         for t in tables:
             try_parse_kimi_summary(t)
+            try_parse_asset_allocation_table(t)
 
         if amounts_after:
             total = sum(amounts_after.values())
@@ -273,6 +364,11 @@ def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, Ce
                     dir_disp = cand.direction_raw if cand.direction_raw else '—'
                     cand.display = f'{format_pct(pct)}（{dir_disp}）'
             return order, out
+        if parsed_pct_direct and out:
+            return order, out
+        order3, out3 = try_parse_categories_from_text()
+        if out3:
+            return order3, out3
         return [], {}
 
     header = table[0]
@@ -351,8 +447,11 @@ def parse_categories(text: str, raw_model: str) -> Tuple[List[str], Dict[str, Ce
     out = {}
     for row in body:
         if len(row) <= max(key_col, pct_col, dir_col): continue
-        key = row[key_col].strip()
-        if not key: continue
+        key_raw = row[key_col].strip()
+        key_plain = re.sub(r'[*_`\\s]+', '', key_raw)
+        if not key_plain or key_plain in ('合计', '总计'):
+            continue
+        key = key_plain
         
         pct = parse_float_from_text(row[pct_col])
         direction = row[dir_col].strip() or None
@@ -507,6 +606,12 @@ def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCan
                 if '建议调整' in value_header_probe:
                     value_col = after_col
 
+            direction_from_adjust_col = find_col(header, ['建议调整'])
+            if direction_from_adjust_col is None:
+                direction_from_adjust_col = find_col(header, ['调整建议'])
+            if direction_from_adjust_col is None:
+                direction_from_adjust_col = find_col(header, ['调整'], excludes=['调整后', '调整前'])
+
             explicit_direction_col = None
             for i, h in enumerate(header):
                 hh = (h or '').strip()
@@ -580,7 +685,11 @@ def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCan
                 if explicit_direction_col is not None and len(row) > explicit_direction_col:
                     direction_from_col = row[explicit_direction_col].strip() or None
 
-                direction = direction_from_col
+                direction_adjust_raw = None
+                if direction_from_adjust_col is not None and len(row) > direction_from_adjust_col:
+                    direction_adjust_raw = (row[direction_from_adjust_col] or '').strip() or None
+
+                direction = direction_from_col or direction_adjust_raw
                 current_value = None
                 if current_col is not None and len(row) > current_col:
                     current_header = (header[current_col] or '').strip()
@@ -636,9 +745,89 @@ def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCan
             return merged_order, merged_items
         return [], {}
 
+    def scan_bullets_all() -> Tuple[List[str], Dict[str, CellCandidate]]:
+        lines = text.splitlines()
+        order: List[str] = []
+        out: Dict[str, CellCandidate] = {}
+
+        def infer_direction(desc: str) -> Optional[str]:
+            s = (desc or '').strip()
+            if not s:
+                return None
+            if any(x in s for x in ['维持', '不变', '保持', '观望', '观察']):
+                return '维持'
+            if any(x in s for x in ['暂停', '停止']):
+                return '暂停'
+            if any(x in s for x in ['新增', '新建', '新开', '新设']):
+                return '新增'
+            if any(x in s for x in ['增持', '加仓', '回补', '补仓', '增加', '提高', '加倍', '翻倍']):
+                return '增持'
+            if any(x in s for x in ['减持', '减仓', '减少', '降低', '止盈', '收缩', '减额']):
+                return '减持'
+            return None
+
+        start_idx = 0
+        for i, ln in enumerate(lines):
+            if '具体标的调整' in ln or '标的调整' in ln:
+                start_idx = i + 1
+                break
+        if start_idx == 0:
+            for i, ln in enumerate(lines):
+                if '定投计划调整建议' in ln:
+                    start_idx = i + 1
+                    break
+
+        end_idx = len(lines)
+        for j in range(start_idx, len(lines)):
+            if re.match(r'^\s*##\s+', lines[j]) and '## 3' not in lines[j]:
+                end_idx = j
+                break
+
+        skip_keys = {'理由', '原因', '说明', '备注', '结论'}
+
+        for ln in lines[start_idx:end_idx]:
+            m = re.match(r'^\s*-\s+\*\*(.+?)\*\*\s*[:：]\s*(.+?)\s*$', ln)
+            if not m:
+                m = re.match(r'^\s*-\s+(.+?)\s*[:：]\s*(.+?)\s*$', ln)
+            if not m:
+                continue
+            key = (m.group(1) or '').strip()
+            desc = (m.group(2) or '').strip()
+            key_plain = re.sub(r'[*_`\\s]+', '', key)
+            if not key_plain:
+                continue
+            if key_plain in skip_keys:
+                continue
+            if not normalize_item_name(key_plain):
+                continue
+
+            direction = infer_direction(desc)
+            if direction:
+                display = f'—（{direction}）'
+                direction_stat = direction_to_stat(direction, is_category=False)
+            else:
+                display = '—'
+                direction_stat = None
+
+            if key_plain in out:
+                continue
+            order.append(key_plain)
+            out[key_plain] = CellCandidate(
+                display=display,
+                pct=None,
+                direction_raw=direction,
+                direction_stat=direction_stat,
+                raw_model=raw_model,
+            )
+
+        return order, out
+
     table, _ = find_table_after_heading(text, '定投计划逐项建议')
     if not table or len(table) < 2:
-        return scan_tables_all()
+        order, out = scan_tables_all()
+        if out:
+            return order, out
+        return scan_bullets_all()
 
     header = table[0]
     body = table[1:]
@@ -650,11 +839,17 @@ def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCan
     dir_col = find_col(header, ['建议'], excludes=['建议%', '建议金额'])
 
     if key_col is None or dir_col is None:
-        return scan_tables_all()
+        order, out = scan_tables_all()
+        if out:
+            return order, out
+        return scan_bullets_all()
 
     value_col = pct_col if pct_col is not None else amt_col
     if value_col is None:
-        return scan_tables_all()
+        order, out = scan_tables_all()
+        if out:
+            return order, out
+        return scan_bullets_all()
     is_percent = (pct_col is not None)
 
     order = []
@@ -705,7 +900,12 @@ def parse_items(text: str, raw_model: str) -> Tuple[List[str], Dict[str, CellCan
                 cand.pct = pct
                 dir_disp = cand.direction_raw if cand.direction_raw else '—'
                 cand.display = f'{format_pct(pct)}（{dir_disp}）'
-    return order, out
+    if out:
+        return order, out
+    order2, out2 = scan_tables_all()
+    if out2:
+        return order2, out2
+    return scan_bullets_all()
 
 def normalize_topic_name(s: str) -> str:
     if not s: return ''
@@ -1813,7 +2013,8 @@ if __name__ == '__main__':
     parser.add_argument('--date', dest='date', default=DEFAULT_DATE)
     parser.add_argument('--force', action='store_true')
     parser.add_argument('--validate-only', action='store_true')
-    parser.add_argument('--publish', action='store_true')
+    parser.add_argument('--publish', dest='publish', action='store_true', default=False)
+    parser.add_argument('--no-publish', dest='publish', action='store_false')
     parser.add_argument('--publish-dry-run', action='store_true')
     args = parser.parse_args()
     sys.exit(main(

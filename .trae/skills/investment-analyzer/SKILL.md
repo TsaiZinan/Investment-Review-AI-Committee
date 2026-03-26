@@ -1,19 +1,6 @@
 ---
 name: "investment-analyzer"
 description: "触发语：每日分析 / 开始单AI分析。执行基金+黄金组合定投分析，生成当日投资建议报告。"
-model_candidates:
-  - DeepSeek
-  - Gemini
-  - GPT-5.2
-  - Grok-4
-  - GLM-4.7
-  - GLM-5
-  - Kimi
-  - MiniMax-M2.1
-  - MiniMax-M2.5
-  - TraeAI
-  - Germini-3-Pro
-  - TraeAI
 ---
 
 # 投资分析器
@@ -37,10 +24,10 @@ model_candidates:
 
 ### 步骤0：确认模型名
 - 向用户提问：`🤔本次使用的“模型名”字符串是什么？`
-- 提供备选列表供用户参考：使用本文件 YAML `model_candidates`（保持顺序展示）
-- 若用户输入的模型名不在候选列表：
-  - 将该模型名追加到本文件 YAML `model_candidates`（去重、保持原样）
-  - 同步更新 `1每日单AI投资分析prompt.md` 中的“模型名候选列表（可增补）”
+- 在提问前先运行：`python scripts/model_registry.py suggest --date "{YYYY-MM-DD}"`
+- 提供备选列表供用户参考：直接使用上一条命令输出的“动态候选（按最近使用生成）”
+- 用户回复后立即运行：`python scripts/model_registry.py observe --model "{模型名}" --date "{YYYY-MM-DD}"`
+- 若用户输入的模型名不在动态候选中：直接接受，并通过上一条命令登记到 `Data/model_registry.json`
 - 必须等待用户回复后才能继续
 - 允许用户在同一句里补充：日期（YYYY-MM-DD）、定投检视周期、风险偏好；未提供则使用最合理默认值（日期=今天，周期=每月，风险偏好=稳健）
 

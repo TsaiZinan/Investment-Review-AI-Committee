@@ -1,0 +1,357 @@
+{
+  "version": 1,
+  "settings": {
+    "active_window_days": 30,
+    "active_min_seen": 2,
+    "recent_window_days": 90,
+    "fallback_limit": 8
+  },
+  "families": [
+    {
+      "key": "deepseek",
+      "order": 0,
+      "prefixes": [
+        "deepseek"
+      ]
+    },
+    {
+      "key": "gemini",
+      "order": 1,
+      "prefixes": [
+        "gemini",
+        "germini"
+      ]
+    },
+    {
+      "key": "gpt",
+      "order": 2,
+      "prefixes": [
+        "gpt"
+      ]
+    },
+    {
+      "key": "grok",
+      "order": 3,
+      "prefixes": [
+        "grok"
+      ]
+    },
+    {
+      "key": "glm",
+      "order": 4,
+      "prefixes": [
+        "glm"
+      ]
+    },
+    {
+      "key": "kimi",
+      "order": 5,
+      "prefixes": [
+        "kimi"
+      ]
+    },
+    {
+      "key": "minimax",
+      "order": 6,
+      "prefixes": [
+        "minimax"
+      ]
+    },
+    {
+      "key": "traeai",
+      "order": 7,
+      "prefixes": [
+        "traeai",
+        "trae"
+      ]
+    },
+    {
+      "key": "qwen",
+      "order": 8,
+      "prefixes": [
+        "qwen"
+      ]
+    },
+    {
+      "key": "doubao",
+      "order": 9,
+      "prefixes": [
+        "doubao"
+      ]
+    }
+  ],
+  "models": [
+    {
+      "canonical_name": "DeepSeek-V3.1",
+      "family": "deepseek",
+      "order": 0,
+      "default_input": "DeepSeek-V3.1",
+      "pinned": false,
+      "aliases": [
+        "DeepSeek-V3.1",
+        "DeepSeek"
+      ]
+    },
+    {
+      "canonical_name": "DeepSeek-V3",
+      "family": "deepseek",
+      "order": 1,
+      "default_input": "DeepSeek-V3",
+      "pinned": false,
+      "aliases": [
+        "DeepSeek-V3"
+      ]
+    },
+    {
+      "canonical_name": "DeepSeek-V3.1-Terminus",
+      "family": "deepseek",
+      "order": 2,
+      "default_input": "DeepSeek-V3.1-Terminus",
+      "pinned": false,
+      "aliases": [
+        "DeepSeek-V3.1-Terminus"
+      ]
+    },
+    {
+      "canonical_name": "Gemini-3.1-Pro-Preview",
+      "family": "gemini",
+      "order": 0,
+      "default_input": "Gemini-3.1-Pro-Preview",
+      "pinned": false,
+      "aliases": [
+        "Gemini-3.1-Pro-Preview",
+        "Gemini-3.1-Pro",
+        "Gemini-3-Pro-Preview",
+        "Gemini-3-Pro",
+        "Gemini",
+        "Germini-3.1-Pro",
+        "Germini-3-Pro"
+      ]
+    },
+    {
+      "canonical_name": "Gemini-3",
+      "family": "gemini",
+      "order": 1,
+      "default_input": "Gemini-3",
+      "pinned": false,
+      "aliases": [
+        "Gemini-3"
+      ]
+    },
+    {
+      "canonical_name": "Gemini-Pro",
+      "family": "gemini",
+      "order": 2,
+      "default_input": "Gemini-Pro",
+      "pinned": false,
+      "aliases": [
+        "Gemini-Pro"
+      ]
+    },
+    {
+      "canonical_name": "GPT-5.4",
+      "family": "gpt",
+      "order": 0,
+      "default_input": "GPT-5.4",
+      "pinned": false,
+      "aliases": [
+        "GPT-5.4"
+      ]
+    },
+    {
+      "canonical_name": "GPT-5.2",
+      "family": "gpt",
+      "order": 1,
+      "default_input": "GPT-5.2",
+      "pinned": false,
+      "aliases": [
+        "GPT-5.2"
+      ]
+    },
+    {
+      "canonical_name": "Grok-4",
+      "family": "grok",
+      "order": 0,
+      "default_input": "Grok-4",
+      "pinned": false,
+      "aliases": [
+        "Grok-4"
+      ]
+    },
+    {
+      "canonical_name": "GLM-5",
+      "family": "glm",
+      "order": 0,
+      "default_input": "GLM-5",
+      "pinned": false,
+      "aliases": [
+        "GLM-5"
+      ]
+    },
+    {
+      "canonical_name": "GLM-4.7",
+      "family": "glm",
+      "order": 1,
+      "default_input": "GLM-4.7",
+      "pinned": false,
+      "aliases": [
+        "GLM-4.7"
+      ]
+    },
+    {
+      "canonical_name": "Kimi-K2.5",
+      "family": "kimi",
+      "order": 0,
+      "default_input": "Kimi-K2.5",
+      "pinned": false,
+      "aliases": [
+        "Kimi-K2.5",
+        "Kimi"
+      ]
+    },
+    {
+      "canonical_name": "Kimi-K2.7",
+      "family": "kimi",
+      "order": 1,
+      "default_input": "Kimi-K2.7",
+      "pinned": false,
+      "aliases": [
+        "Kimi-K2.7"
+      ]
+    },
+    {
+      "canonical_name": "Kimi-1.5",
+      "family": "kimi",
+      "order": 2,
+      "default_input": "Kimi-1.5",
+      "pinned": false,
+      "aliases": [
+        "Kimi-1.5"
+      ]
+    },
+    {
+      "canonical_name": "Kimi-K2-0905",
+      "family": "kimi",
+      "order": 3,
+      "default_input": "Kimi-K2-0905",
+      "pinned": false,
+      "aliases": [
+        "Kimi-K2-0905"
+      ]
+    },
+    {
+      "canonical_name": "MiniMax-M2.7",
+      "family": "minimax",
+      "order": 0,
+      "default_input": "MiniMax-M2.7",
+      "pinned": false,
+      "aliases": [
+        "MiniMax-M2.7"
+      ]
+    },
+    {
+      "canonical_name": "MiniMax-M2.5",
+      "family": "minimax",
+      "order": 1,
+      "default_input": "MiniMax-M2.5",
+      "pinned": false,
+      "aliases": [
+        "MiniMax-M2.5"
+      ]
+    },
+    {
+      "canonical_name": "MiniMax-M2.1",
+      "family": "minimax",
+      "order": 2,
+      "default_input": "MiniMax-M2.1",
+      "pinned": false,
+      "aliases": [
+        "MiniMax-M2.1",
+        "MiniMax"
+      ]
+    },
+    {
+      "canonical_name": "MiniMax-M2.1.1",
+      "family": "minimax",
+      "order": 3,
+      "default_input": "MiniMax-M2.1.1",
+      "pinned": false,
+      "aliases": [
+        "MiniMax-M2.1.1"
+      ]
+    },
+    {
+      "canonical_name": "TraeAI",
+      "family": "traeai",
+      "order": 0,
+      "default_input": "TraeAI",
+      "pinned": false,
+      "aliases": [
+        "TraeAI",
+        "TRAE"
+      ]
+    },
+    {
+      "canonical_name": "Qwen3.5-Plus",
+      "family": "qwen",
+      "order": 0,
+      "default_input": "Qwen3.5-Plus",
+      "pinned": false,
+      "aliases": [
+        "Qwen3.5-Plus"
+      ]
+    },
+    {
+      "canonical_name": "Qwen-3-Coder",
+      "family": "qwen",
+      "order": 1,
+      "default_input": "Qwen-3-Coder",
+      "pinned": false,
+      "aliases": [
+        "Qwen-3-Coder"
+      ]
+    },
+    {
+      "canonical_name": "Qwen-3-Pro",
+      "family": "qwen",
+      "order": 2,
+      "default_input": "Qwen-3-Pro",
+      "pinned": false,
+      "aliases": [
+        "Qwen-3-Pro"
+      ]
+    },
+    {
+      "canonical_name": "Doubao-Seed-2.0",
+      "family": "doubao",
+      "order": 0,
+      "default_input": "Doubao-Seed-2.0",
+      "pinned": false,
+      "aliases": [
+        "Doubao-Seed-2.0",
+        "Doubao"
+      ]
+    },
+    {
+      "canonical_name": "cntest",
+      "family": "other",
+      "order": 0,
+      "default_input": "cntest",
+      "pinned": false,
+      "aliases": [
+        "cntest"
+      ]
+    },
+    {
+      "canonical_name": "test",
+      "family": "other",
+      "order": 1,
+      "default_input": "test",
+      "pinned": false,
+      "aliases": [
+        "test"
+      ]
+    }
+  ],
+  "observations": {}
+}

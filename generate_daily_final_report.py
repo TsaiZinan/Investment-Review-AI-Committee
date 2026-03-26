@@ -5,6 +5,8 @@ from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from scripts.model_registry import build_model_sort_key, canonicalize_model_name, load_registry
+
 
 ROOT = Path(__file__).resolve().parent
 DATE = date.today().isoformat()
@@ -14,44 +16,16 @@ OUTPUT_PATH = ROOT / "每日最终报告" / f"{DATE}_最终投资总结.md"
 
 FILE_RE = re.compile(rf"^{re.escape(DATE)}_(.+)_投资建议\.md$")
 
-MODEL_ORDER_FIXED = [
-    "DeepSeek",
-    "Gemini",
-    "GPT-5.2",
-    "Grok-4",
-    "GLM-4.7",
-    "Kimi",
-    "MiniMax-M2.1",
-    "TraeAI",
-]
-
 CATEGORY_ORDER_FIXED = ["债券", "中股", "期货", "美股"]
+MODEL_REGISTRY = load_registry()
 
 
 def canonicalize_model(raw_model: str) -> str:
-    s = raw_model.strip()
-    low = s.lower()
-    if low.startswith("gemini"):
-        return "Gemini"
-    if low.startswith("kimi"):
-        return "Kimi"
-    if low.startswith("minimax"):
-        return "MiniMax-M2.1"
-    if low.startswith("traeai"):
-        return "TraeAI"
-    if low.startswith("deepseek"):
-        return "DeepSeek"
-    if low.startswith("grok"):
-        return "Grok-4"
-    if low.startswith("glm"):
-        return "GLM-4.7"
-    return s
+    return canonicalize_model_name(raw_model, MODEL_REGISTRY)
 
 
 def model_columns(models_present: List[str]) -> List[str]:
-    fixed = [m for m in MODEL_ORDER_FIXED if m in models_present]
-    others = sorted([m for m in models_present if m not in MODEL_ORDER_FIXED])
-    return fixed + others
+    return sorted(set(models_present), key=lambda model: build_model_sort_key(model, MODEL_REGISTRY))
 
 
 def parse_float_from_text(s: str) -> Optional[float]:
