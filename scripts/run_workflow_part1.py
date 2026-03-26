@@ -526,6 +526,8 @@ def validate_outputs():
     consistency_ok = True
     if report_file.exists() and JSON_FILE.exists():
         report_text = report_file.read_text(encoding="utf-8", errors="replace")
+        # Create a version without spaces for more flexible matching
+        report_text_no_spaces = report_text.replace(' ', '')
         try:
             strategy = json.loads(JSON_FILE.read_text(encoding="utf-8"))
         except Exception:
@@ -541,7 +543,8 @@ def validate_outputs():
                 fund_names.append(n)
 
         for n in fund_names:
-            if n not in report_text:
+            # Try exact match first, then match without spaces
+            if n not in report_text and n.replace(' ', '') not in report_text_no_spaces:
                 fund_missing.append(n)
         consistency_ok = len(fund_missing) == 0
 

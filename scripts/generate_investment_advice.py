@@ -258,7 +258,7 @@ def generate_report(model_name, date_str):
     report_content.append(f"* 定投检视周期：每月")
     report_content.append(f"* 风险偏好：稳健")
     report_content.append(f"* 定投大类目标：{goal_str}（合计 100%）")
-    report_content.append(f"* 关键假设：仅做小幅结构微调，避免频繁换手")
+    report_content.append(f"* 关键假设：{{模型名}} = {model_name}；定投检视周期默认每月；仅做小幅结构微调")
     report_content.append(f"* 产物路径：")
     report_content.append(f"  - 投资策略.json：报告/{date_str}/投资策略.json")
     report_content.append(f"  - 投资简报_{model_name}.md：报告/{date_str}/简报/投资简报_{model_name}.md")
@@ -309,72 +309,59 @@ def generate_report(model_name, date_str):
     report_content.append("| 无 | 0.00 | 占全组合 | 优先执行结构调整 |")
     report_content.append("")
 
-    report_content.append("### 4.1 非定投持仓说明 (Non-SIP Holdings)")
-    if non_investment_holdings:
-        report_content.append("| 大板块 | 小板块 | 标的 | 当前持有 |")
-        report_content.append("|---|---|---|---:|")
-        for x in non_investment_holdings:
-            report_content.append(
-                f"| {(x.get('category') or '').strip()} | {(x.get('sub_category') or '').strip()} | {(x.get('fund_name') or '').strip()} | {(x.get('current_holding') or 0):.2f} |"
-            )
-    else:
-        report_content.append("无")
+    report_content.append("### 5. 执行指令（下一周期）(Next Actions)")
+    report_content.append("* 定投：债券小幅加码，中股小幅降档，期货/美股维持")
+    report_content.append("* 资金池：若沪深300单周回撤≥5%，加买“广发沪深300ETF联接C/华泰柏瑞中证红利低波动ETF联接A”")
+    report_content.append("* 风险控制：主题类单月回撤≥10%定投减半；组合月回撤≥8%临时提高债券/货币；偏离建议%>2pp则回到目标")
     report_content.append("")
 
-    report_content.append("### 5. 关键市场观察 (Key Market Observations)")
-    obs = []
-    dgs10 = get_fred_point(market_data, "DGS10")
-    if dgs10.get("value") is not None:
-        obs.append(f"* 美债10Y {dgs10['value']:.2f}%（{dgs10.get('date')}，FRED）")
-    dgs2 = get_fred_point(market_data, "DGS2")
-    if dgs2.get("value") is not None:
-        obs.append(f"* 美债2Y {dgs2['value']:.2f}%（{dgs2.get('date')}，FRED）")
-    t10y2y = get_fred_point(market_data, "T10Y2Y")
-    if t10y2y.get("value") is not None:
-        obs.append(f"* 10Y-2Y 利差 {t10y2y['value']:.2f}%（{t10y2y.get('date')}，FRED）")
-    t10yie = get_fred_point(market_data, "T10YIE")
-    if t10yie.get("value") is not None:
-        obs.append(f"* 10Y通胀预期 {t10yie['value']:.2f}%（{t10yie.get('date')}，FRED）")
-    gvz = get_fred_point(market_data, "GVZCLS")
-    if gvz.get("value") is not None:
-        obs.append(f"* 黄金波动指数GVZ {gvz['value']:.2f}（{gvz.get('date')}，FRED）")
-    usdcny = get_fred_point(market_data, "DEXCHUS")
-    if usdcny.get("value") is not None:
-        obs.append(f"* USD/CNY {usdcny['value']:.3f}（{usdcny.get('date')}，FRED）")
-    report_content.extend(obs[:6] if obs else ["* 本次无可用宏观数据点（market_data.json 缺失或解析失败）"])
-    report_content.append("")
-
-    report_content.append("### 6. 风险提示 (Risk Warnings)")
-    report_content.append("* 中股主题类（芯片/消费电子）波动可能放大。")
-    report_content.append("* 海外利率若再上行，长久期资产短期承压。")
-    report_content.append("* 贵金属与商品受美元与实际利率影响较大。")
-    report_content.append("* QDII 受汇率与海外市场双重波动影响。")
-    report_content.append("")
-
-    report_content.append("### 7. 执行建议 (Execution Suggestions)")
-    report_content.append("* 本次仅做小幅比例调整，按周定投节奏执行。")
-    report_content.append("* 若单周大幅回撤，优先补充“稳健底仓”（沪深300/红利低波）。")
-    report_content.append("* 主题类（芯片/消费电子）严格按建议%执行，不追涨。")
-    report_content.append("* 记录本周执行后各标的建议%偏离，次月复盘再校准。")
+    report_content.append("### 6. 现有持仓建议（最多 5 点）(Holdings Notes)")
+    holdings_names = [(x.get("fund_name") or "").strip() for x in non_investment_holdings if isinstance(x, dict)]
+    has = lambda s: any(s in n for n in holdings_names)
+    notes = []
+    if holdings_names:
+        notes.append(f"* 非定投持仓（清单）：{' / '.join([n for n in holdings_names if n])} — 仅做观察")
+    if has("天弘余额宝"):
+        notes.append("* 天弘余额宝货币市场基金：维持资金池 — 回撤缓冲")
+    if has("北证50") or has("北证"):
+        notes.append("* 易方达北证50指数C/广发北证50成份指数C：合并保留一只 — 降低重复")
+    if has("半导体") or has("芯片"):
+        notes.append("* 华夏国证半导体芯片ETF联接C：与定投芯片统一 — 降低分散")
+    if has("创新药"):
+        notes.append("* 广发创新药产业ETF联接C/广发港股创新药ETF联接(QDII)C：与A类定投统一 — 便于执行")
+    if has("上证综指"):
+        notes.append("* 富国上证综指联接C：评估与底仓重叠 — 聚焦核心")
+    report_content.extend(notes[:5] if notes else ["* 无：本期无非定投持仓信息"])
     report_content.append("")
 
     report_content.append("### 7. 数据来源 (Sources)")
     fetched_at = (market_data or {}).get("fetched_at")
+    dgs10 = get_fred_point(market_data, "DGS10")
+    dgs2 = get_fred_point(market_data, "DGS2")
+    t10y2y = get_fred_point(market_data, "T10Y2Y")
+    t10yie = get_fred_point(market_data, "T10YIE")
+    gvz = get_fred_point(market_data, "GVZCLS")
+    usdcny = get_fred_point(market_data, "DEXCHUS")
+    sources = []
     if fetched_at:
-        report_content.append(f"1. market_data.json（{fetched_at}）")
-    report_content.append(f"2. 投资策略.json（{date_str}）")
-    if dgs10.get("url") and dgs10.get("date"):
-        report_content.append(f"3. FRED {dgs10['id']}（{dgs10['date']}）")
-    if dgs2.get("url") and dgs2.get("date"):
-        report_content.append(f"4. FRED {dgs2['id']}（{dgs2['date']}）")
-    if t10y2y.get("url") and t10y2y.get("date"):
-        report_content.append(f"5. FRED {t10y2y['id']}（{t10y2y['date']}）")
-    if t10yie.get("url") and t10yie.get("date"):
-        report_content.append(f"6. FRED {t10yie['id']}（{t10yie['date']}）")
-    if gvz.get("url") and gvz.get("date"):
-        report_content.append(f"7. FRED {gvz['id']}（{gvz['date']}）")
-    if usdcny.get("url") and usdcny.get("date"):
-        report_content.append(f"8. FRED {usdcny['id']}（{usdcny['date']}）")
+        sources.append(f"market_data.json（{fetched_at}）")
+    sources.append(f"投资策略.json（{date_str}）")
+    if dgs10.get("date"):
+        sources.append(f"FRED {dgs10['id']}（{dgs10['date']}）")
+    if dgs2.get("date"):
+        sources.append(f"FRED {dgs2['id']}（{dgs2['date']}）")
+    if t10y2y.get("date"):
+        sources.append(f"FRED {t10y2y['id']}（{t10y2y['date']}）")
+    if t10yie.get("date"):
+        sources.append(f"FRED {t10yie['id']}（{t10yie['date']}）")
+    if gvz.get("date"):
+        sources.append(f"FRED {gvz['id']}（{gvz['date']}）")
+    if usdcny.get("date"):
+        sources.append(f"FRED {usdcny['id']}（{usdcny['date']}）")
+    for i, s in enumerate(sources[:8], start=1):
+        report_content.append(f"{i}. {s}")
+    report_content.append("")
+    report_content.append("---")
     
     # 保存报告
     with open(output_file, 'w', encoding='utf-8') as f:
